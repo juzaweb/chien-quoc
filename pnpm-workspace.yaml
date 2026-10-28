@@ -1,0 +1,14 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: true
+
+minimumReleaseAgeExclude:
+  - lucide-react@1.63.0
+
+onlyBuiltDependencies:
+  - esbuild
+  - msgpackr-extract

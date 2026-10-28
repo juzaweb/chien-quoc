@@ -1,0 +1,16 @@
+{
+  "name": "chien-quoc-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "2D Isometric MMO RTS Web Game",
+  "scripts": {
+    "dev": "pnpm --filter \"@chien-quoc/*\" --parallel run dev",
+    "dev:server": "pnpm --filter \"@chien-quoc/server\" run dev",
+    "dev:client": "pnpm --filter \"@chien-quoc/client\" run dev",
+    "build": "pnpm --filter \"@chien-quoc/shared\" run build && pnpm --filter \"@chien-quoc/*\" run build",
+    "clean": "pnpm --filter \"@chien-quoc/*\" run clean"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

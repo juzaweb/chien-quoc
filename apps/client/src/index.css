@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: #020617;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+.font-medieval {
+  font-family: 'Cinzel', serif;
+}
+
+/* Custom scrollbars and HUD styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.5);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.8);
+}
+
+.aoe-panel {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
+  border: 2px solid #b45309;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.8), 0 0 10px 1px rgba(217, 119, 6, 0.2);
+}
+
+.aoe-button {
+  background: linear-gradient(180deg, #475569 0%, #1e293b 100%);
+  border: 1px solid #78350f;
+  transition: all 0.15s ease-in-out;
+}
+.aoe-button:hover:not(:disabled) {
+  background: linear-gradient(180deg, #64748b 0%, #334155 100%);
+  border-color: #f59e0b;
+  transform: translateY(-1px);
+}
+.aoe-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.aoe-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.aoe-gold-border {
+  border-color: #d97706;
+}
+
