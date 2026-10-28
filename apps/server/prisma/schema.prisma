@@ -1,0 +1,78 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Player {
+  id            String     @id
+  name          String     @unique
+  color         String     @default("#3b82f6")
+  wood          Float      @default(300)
+  food          Float      @default(300)
+  gold          Float      @default(150)
+  stone         Float      @default(100)
+  population    Int        @default(0)
+  populationCap Int        @default(10)
+  isOnline      Boolean    @default(true)
+  lastSavedAt   DateTime   @default(now()) @updatedAt
+  createdAt     DateTime   @default(now())
+
+  buildings     Building[]
+  units         Unit[]
+}
+
+model Building {
+  id                   String   @id
+  ownerId              String
+  type                 String
+  gridX                Int
+  gridY                Int
+  sizeX                Int
+  sizeY                Int
+  hp                   Float
+  maxHp                Float
+  isConstructed        Boolean  @default(true)
+  constructionProgress Float    @default(100)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  player               Player   @relation(fields: [ownerId], references: [name], onDelete: Cascade)
+
+  @@index([ownerId])
+}
+
+model Unit {
+  id          String   @id
+  ownerId     String
+  type        String
+  x           Float
+  y           Float
+  speed       Float
+  hp          Float
+  maxHp       Float
+  actionState String   @default("IDLE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  player      Player   @relation(fields: [ownerId], references: [name], onDelete: Cascade)
+
+  @@index([ownerId])
+}
+
+model WorldResourceNode {
+  id              String   @id
+  type            String
+  resourceType    String
+  gridX           Int
+  gridY           Int
+  remainingAmount Float
+  maxAmount       Float
+  updatedAt       DateTime @updatedAt
+
+  @@index([gridX, gridY])
+}
+

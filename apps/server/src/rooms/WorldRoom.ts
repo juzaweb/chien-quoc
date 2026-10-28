@@ -1,4 +1,5 @@
 import { Room, Client } from '@colyseus/core';
+import { DatabaseService } from '../services/DatabaseService.js';
 import {
   BUILDING_BLUEPRINTS,
   BuildingBlueprint,
@@ -42,7 +43,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
   onCreate(options: any) {
     this.setState(new WorldState());
-    this.generateWorldResources();
+    this.initializeWorldPersistence();
 
     // Setup network message listeners
     this.onMessage(NetworkMessage.PLACE_BUILDING, (client, message: PlaceBuildingPayload) => {
@@ -67,7 +68,80 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     // Run authoritative tick loop
     this.setSimulationInterval((deltaTime) => this.update(deltaTime), 1000 / SERVER_TICK_RATE);
-    console.log('[WorldRoom] Room created and initialized.');
+
+    // Auto-save world state to SQLite every 30 seconds
+    this.clock.setInterval(() => {
+      DatabaseService.saveFullWorldState(this.state);
+    }, 30000);
+
+    console.log('[WorldRoom] Room created with SQLite persistence.');
+  }
+
+  private async initializeWorldPersistence() {
+    try {
+      // 1. Load resources from SQLite
+      const savedResources = await DatabaseService.loadResources();
+      if (savedResources && savedResources.length > 0) {
+        for (const res of savedResources) {
+          const node = new ResourceNodeState();
+          node.id = res.id;
+          node.type = res.type;
+          node.resourceType = res.resourceType;
+          node.gridX = res.gridX;
+          node.gridY = res.gridY;
+          node.remainingAmount = res.remainingAmount;
+          node.maxAmount = res.maxAmount;
+          this.state.resourceNodes.set(res.id, node);
+        }
+        console.log(`📦 [WorldRoom] Restored ${savedResources.length} resource nodes from database.`);
+      } else {
+        this.generateWorldResources();
+        const resArray: ResourceNodeState[] = [];
+        this.state.resourceNodes.forEach((node: ResourceNodeState) => resArray.push(node));
+        await DatabaseService.saveAllResources(resArray);
+      }
+
+      // 2. Restore all saved player empires from SQLite
+      const savedPlayers = await DatabaseService.loadAllWorldEntities();
+      for (const p of savedPlayers) {
+        for (const b of p.buildings) {
+          const building = new BuildingState();
+          building.id = b.id;
+          building.ownerId = p.name;
+          building.type = b.type;
+          building.gridX = b.gridX;
+          building.gridY = b.gridY;
+          building.sizeX = b.sizeX;
+          building.sizeY = b.sizeY;
+          building.hp = b.hp;
+          building.maxHp = b.maxHp;
+          building.isConstructed = b.isConstructed;
+          building.constructionProgress = b.constructionProgress;
+          this.state.buildings.set(b.id, building);
+        }
+
+        for (const u of p.units) {
+          const unit = new UnitState();
+          unit.id = u.id;
+          unit.ownerId = p.name;
+          unit.type = u.type;
+          unit.x = u.x;
+          unit.y = u.y;
+          unit.targetX = u.x;
+          unit.targetY = u.y;
+          unit.speed = u.speed;
+          unit.hp = u.hp;
+          unit.maxHp = u.maxHp;
+          unit.actionState = u.actionState;
+          this.state.units.set(u.id, unit);
+        }
+      }
+      if (savedPlayers.length > 0) {
+        console.log(`🏰 [WorldRoom] Restored bases for ${savedPlayers.length} empires from database.`);
+      }
+    } catch (err) {
+      console.error('❌ [WorldRoom] Failed to initialize persistence:', err);
+    }
   }
 
   private generateWorldResources() {
@@ -106,19 +180,69 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
   }
 
-  onJoin(client: Client, options: any) {
-    const player = new PlayerState();
-    player.id = client.sessionId;
-    player.name = (options && options.playerName) || `Emperor_${client.sessionId.substring(0, 4)}`;
+  async onJoin(client: Client, options: any) {
+    const playerName = (options && options.playerName) || `Emperor_${client.sessionId.substring(0, 4)}`;
 
-    const playerIndex = this.state.players.size % PLAYER_COLORS.length;
-    player.color = PLAYER_COLORS[playerIndex];
+    try {
+      // Check if player profile already exists in Database
+      const savedProfile = await DatabaseService.loadPlayerProfile(playerName);
 
-    this.state.players.set(client.sessionId, player);
-    console.log(`[WorldRoom] Player ${player.name} (${client.sessionId}) joined.`);
+      const player = new PlayerState();
+      player.id = client.sessionId;
+      player.name = playerName;
 
-    // Spawn player initial base: Town Center + 3 starting Villagers
-    this.spawnInitialBase(client.sessionId);
+      if (savedProfile) {
+        player.color = savedProfile.color;
+        player.wood = savedProfile.wood;
+        player.food = savedProfile.food;
+        player.gold = savedProfile.gold;
+        player.stone = savedProfile.stone;
+        player.population = savedProfile.population;
+        player.populationCap = savedProfile.populationCap;
+        player.isOnline = true;
+
+        this.state.players.set(client.sessionId, player);
+
+        // Re-assign ownership of their structures and troops to active sessionId
+        this.state.buildings.forEach((b: BuildingState) => {
+          if (b.ownerId === playerName || b.ownerId === savedProfile.id) {
+            b.ownerId = client.sessionId;
+          }
+        });
+
+        this.state.units.forEach((u: UnitState) => {
+          if (u.ownerId === playerName || u.ownerId === savedProfile.id) {
+            u.ownerId = client.sessionId;
+          }
+        });
+
+        this.updatePlayerPopulation(client.sessionId);
+        console.log(`🏰 [WorldRoom] Welcome back Emperor ${playerName}! Empire restored from SQLite.`);
+      } else {
+        const playerIndex = this.state.players.size % PLAYER_COLORS.length;
+        player.color = PLAYER_COLORS[playerIndex];
+
+        this.state.players.set(client.sessionId, player);
+        console.log(`⚔️ [WorldRoom] New Emperor ${player.name} (${client.sessionId}) joined.`);
+
+        // Spawn initial base: Town Center + 3 starting Villagers
+        this.spawnInitialBase(client.sessionId);
+
+        // Persist new empire immediately to DB
+        const ownedB: BuildingState[] = [];
+        this.state.buildings.forEach((b: BuildingState) => {
+          if (b.ownerId === client.sessionId) ownedB.push(b);
+        });
+        const ownedU: UnitState[] = [];
+        this.state.units.forEach((u: UnitState) => {
+          if (u.ownerId === client.sessionId) ownedU.push(u);
+        });
+
+        await DatabaseService.savePlayerEmpire(player, ownedB, ownedU);
+      }
+    } catch (err) {
+      console.error(`❌ [WorldRoom] Error joining player ${playerName}:`, err);
+    }
   }
 
   private spawnInitialBase(sessionId: string) {
@@ -572,11 +696,27 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     player.populationCap = Math.min(200, totalCap);
   }
 
-  onLeave(client: Client, code?: number) {
+  async onLeave(client: Client, code?: number) {
     const player = this.state.players.get(client.sessionId);
     if (player) {
       player.isOnline = false;
-      console.log(`[WorldRoom] Player ${player.name} left (online = false, code = ${code}).`);
+      console.log(`[WorldRoom] Player ${player.name} left. Saving empire to SQLite...`);
+
+      const ownedB: BuildingState[] = [];
+      this.state.buildings.forEach((b: BuildingState) => {
+        if (b.ownerId === client.sessionId) ownedB.push(b);
+      });
+      const ownedU: UnitState[] = [];
+      this.state.units.forEach((u: UnitState) => {
+        if (u.ownerId === client.sessionId) ownedU.push(u);
+      });
+
+      await DatabaseService.savePlayerEmpire(player, ownedB, ownedU);
     }
+  }
+
+  async onDispose() {
+    console.log('🛑 [WorldRoom] Room disposing. Executing final SQLite database flush...');
+    await DatabaseService.saveFullWorldState(this.state);
   }
 }

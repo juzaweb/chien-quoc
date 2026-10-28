@@ -8,6 +8,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
     "clean": "rm -rf dist"
   },
   "dependencies": {
@@ -16,6 +18,7 @@
     "@colyseus/schema": "^5.0.42",
     "@colyseus/tools": "^0.18.11",
     "@colyseus/ws-transport": "^0.18.4",
+    "@prisma/client": "^6.19.3",
     "cors": "^2.8.5",
     "express": "^4.21.2"
   },
@@ -23,6 +26,7 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.1",
+    "prisma": "^6.19.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }

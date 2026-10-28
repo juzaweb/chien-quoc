@@ -17,6 +17,7 @@ chien-quoc/
 
 - **Frontend Core:** [React 18](https://react.dev/) + [Vite](https://vitejs.dev/) + [Phaser 3](https://phaser.io/)
 - **Multiplayer Server:** [Colyseus.js](https://colyseus.io/) (Authoritative game room, state synchronization schema, 20 ticks/sec simulation)
+- **Database & Persistence:** SQLite with [Prisma ORM](https://www.prisma.io/) (WAL mode, auto-save every 30s, instant empire restore)
 - **Styling & UI:** Tailwind CSS, Lucide Icons, Cinzel medieval typography
 - **Graphics Engine:** Procedural Isometric 2.5D Pixel Art Generator (zero missing assets / 404s)
 
