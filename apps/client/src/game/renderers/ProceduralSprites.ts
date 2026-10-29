@@ -7,38 +7,19 @@ import * as Phaser from 'phaser';
 export function generateProceduralTextures(scene: Phaser.Scene) {
   if (scene.textures.exists('tile_grass')) return;
 
-  // 1. Isometric Grass Tile (128x64 - AoE 2 Definitive Edition standard)
-  createCanvasTexture(scene, 'tile_grass', 128, 64, (ctx) => {
-    ctx.beginPath();
-    ctx.moveTo(64, 1);
-    ctx.lineTo(127, 32);
-    ctx.lineTo(64, 63);
-    ctx.lineTo(1, 32);
-    ctx.closePath();
-
-    ctx.fillStyle = '#417a26';
-    ctx.fill();
-
-    // Subtle grass blade variations
-    ctx.strokeStyle = '#4d8f2d';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Light highlights on top edges
-    ctx.beginPath();
-    ctx.moveTo(64, 1);
-    ctx.lineTo(127, 32);
-    ctx.strokeStyle = 'rgba(134, 239, 172, 0.25)';
-    ctx.stroke();
-
-    // Subtle dark shadows on bottom edges
-    ctx.beginPath();
-    ctx.moveTo(127, 32);
-    ctx.lineTo(64, 63);
-    ctx.lineTo(1, 32);
-    ctx.strokeStyle = 'rgba(20, 83, 45, 0.4)';
-    ctx.stroke();
-  });
+  // 1. Isometric Grass Tile Fallback (only used if external assets fail to load)
+  if (!scene.textures.exists('tile_grass')) {
+    createCanvasTexture(scene, 'tile_grass_fallback', 128, 64, (ctx) => {
+      ctx.beginPath();
+      ctx.moveTo(64, 0);
+      ctx.lineTo(128, 32);
+      ctx.lineTo(64, 64);
+      ctx.lineTo(0, 32);
+      ctx.closePath();
+      ctx.fillStyle = '#5c7a2f';
+      ctx.fill();
+    });
+  }
 
   // 2. Isometric Grid Highlight Tile (128x64)
   createCanvasTexture(scene, 'tile_highlight', 128, 64, (ctx) => {

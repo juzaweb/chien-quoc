@@ -41,32 +41,60 @@ export const HUD: React.FC<HUDProps> = ({
       <div className="flex items-center gap-5 bg-slate-950/85 border-2 border-amber-700/80 rounded-lg px-6 py-2 shadow-2xl backdrop-blur-md pointer-events-auto">
         {/* Wood */}
         <div className="flex items-center gap-2" title="Gỗ (Wood)">
-          <div className="p-1 rounded bg-amber-950/60 text-amber-500 border border-amber-800/40">
-            <Axe size={16} />
+          <div className="w-7 h-7 rounded bg-amber-950/70 border border-amber-600/50 flex items-center justify-center p-0.5 shadow-inner">
+            <img
+              src="/assets/icons/wood.png?v=3"
+              alt="Gỗ"
+              className="w-full h-full object-contain filter drop-shadow"
+              onError={(e) => {
+                (e.target as HTMLElement).style.display = 'none';
+              }}
+            />
           </div>
           <span className="font-semibold text-slate-100 text-sm tabular-nums">{Math.floor(wood)}</span>
         </div>
 
         {/* Food */}
         <div className="flex items-center gap-2" title="Thực lương (Food)">
-          <div className="p-1 rounded bg-red-950/60 text-red-400 border border-red-800/40">
-            <Drumstick size={16} />
+          <div className="w-7 h-7 rounded bg-red-950/70 border border-red-600/50 flex items-center justify-center p-0.5 shadow-inner">
+            <img
+              src="/assets/icons/food.png?v=3"
+              alt="Lương thực"
+              className="w-full h-full object-contain filter drop-shadow"
+              onError={(e) => {
+                (e.target as HTMLElement).style.display = 'none';
+              }}
+            />
           </div>
           <span className="font-semibold text-slate-100 text-sm tabular-nums">{Math.floor(food)}</span>
         </div>
 
         {/* Gold */}
         <div className="flex items-center gap-2" title="Vàng (Gold)">
-          <div className="p-1 rounded bg-yellow-950/60 text-yellow-400 border border-yellow-800/40">
-            <Coins size={16} />
+          <div className="w-7 h-7 rounded bg-yellow-950/70 border border-yellow-600/50 flex items-center justify-center p-0.5 shadow-inner">
+            <img
+              src="/assets/icons/gold.png?v=3"
+              alt="Vàng"
+              className="w-full h-full object-contain filter drop-shadow"
+              onError={(e) => {
+                (e.target as HTMLElement).style.display = 'none';
+              }}
+            />
           </div>
           <span className="font-semibold text-slate-100 text-sm tabular-nums">{Math.floor(gold)}</span>
         </div>
 
         {/* Stone */}
         <div className="flex items-center gap-2" title="Đá (Stone)">
-          <div className="p-1 rounded bg-slate-800/60 text-slate-300 border border-slate-700/40">
-            <Mountain size={16} />
+          <div className="w-7 h-7 rounded bg-slate-800/70 border border-slate-500/50 flex items-center justify-center p-0.5 shadow-inner">
+            <img
+              src="/assets/icons/stone.png?v=3"
+              alt="Đá"
+              className="w-full h-full object-contain filter drop-shadow"
+              onError={(e) => {
+                (e.target as HTMLElement).style.display = 'none';
+              }}
+            />
           </div>
           <span className="font-semibold text-slate-100 text-sm tabular-nums">{Math.floor(stone)}</span>
         </div>
@@ -76,8 +104,15 @@ export const HUD: React.FC<HUDProps> = ({
 
         {/* Population */}
         <div className="flex items-center gap-2" title="Dân số (Population)">
-          <div className="p-1 rounded bg-sky-950/60 text-sky-400 border border-sky-800/40">
-            <Users size={16} />
+          <div className="w-7 h-7 rounded bg-sky-950/70 border border-sky-600/50 flex items-center justify-center p-0.5 shadow-inner">
+            <img
+              src="/assets/icons/population.png?v=3"
+              alt="Dân số"
+              className="w-full h-full object-contain filter drop-shadow"
+              onError={(e) => {
+                (e.target as HTMLElement).style.display = 'none';
+              }}
+            />
           </div>
           <span
             className={`font-semibold text-sm tabular-nums ${

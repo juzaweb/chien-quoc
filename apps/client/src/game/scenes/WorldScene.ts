@@ -117,11 +117,21 @@ export class WorldScene extends Phaser.Scene {
     this.load.image('res_node_GOLD_MINE', `/assets/resources/gold.png?${v}`);
     this.load.image('res_node_STONE_MINE', `/assets/resources/stone.png?${v}`);
     this.load.image('res_node_BERRY_BUSH', `/assets/resources/berry.png?${v}`);
+
+    // Preload Age of Empires 2 Grass Terrain textures
+    const tv = 'v=6';
+    this.load.image('tile_grass_1', `/assets/terrain/grass_1.png?${tv}`);
+    this.load.image('tile_grass_2', `/assets/terrain/grass_2.png?${tv}`);
+    this.load.image('tile_grass_3', `/assets/terrain/grass_3.png?${tv}`);
+    this.load.image('tile_grass', `/assets/terrain/grass.png?${tv}`);
   }
 
   create() {
     // Disable right click context menu in browser
     this.input.mouse?.disableContextMenu();
+
+    // Natural AoE grass background clear color (eliminates any sub-pixel black seam line)
+    this.cameras.main.setBackgroundColor('#58752d');
 
     // Register unit animations if spritesheets are loaded
     this.initUnitAnimations();
@@ -1130,16 +1140,16 @@ export class WorldScene extends Phaser.Scene {
           }
           poolIdx++;
 
+          // Natural grass texture variation (AoE 2 meadow style)
+          const variant = ((gx * 7 + gy * 13) % 3) + 1;
+          const texKey = this.textures.exists(`tile_grass_${variant}`) ? `tile_grass_${variant}` : 'tile_grass';
+          if (tile.texture.key !== texKey) {
+            tile.setTexture(texKey);
+          }
+
           tile.setPosition(screenPos.x, screenPos.y);
           tile.setVisible(true);
-
-          // Subtle organic terrain shading
-          const shade = (gx * 17 + gy * 31) % 5;
-          if (shade === 0) tile.setTint(0xedf8eb);
-          else if (shade === 1) tile.setTint(0xf7fdf5);
-          else if (shade === 2) tile.setTint(0xe2f0df);
-          else if (shade === 3) tile.setTint(0xd9ecd6);
-          else tile.clearTint();
+          tile.clearTint();
         }
       }
     }
