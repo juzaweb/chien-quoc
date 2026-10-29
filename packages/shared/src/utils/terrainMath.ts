@@ -1,4 +1,78 @@
 import { MAP_GRID_HEIGHT, MAP_GRID_WIDTH } from '../constants/index.js';
+import { gridToScreen } from './isoMath.js';
+
+export interface RoadSplinePoint {
+  x: number;
+  y: number;
+  variant: number;
+}
+
+let cachedRoadSplinePoints: RoadSplinePoint[] | null = null;
+
+/**
+ * Returns pre-calculated dense spline points for rendering continuous organic AoE dirt roads.
+ */
+export function getAllRoadSplinePoints(): RoadSplinePoint[] {
+  if (cachedRoadSplinePoints) {
+    return cachedRoadSplinePoints;
+  }
+
+  const points: RoadSplinePoint[] = [];
+  const addPoint = (gx: number, gy: number, seed: number) => {
+    if (gx < 0 || gx >= MAP_GRID_WIDTH || gy < 0 || gy >= MAP_GRID_HEIGHT) return;
+    const screen = gridToScreen(gx, gy);
+    const variant = (Math.abs(Math.floor(seed)) % 3) + 1;
+    points.push({
+      x: Math.round(screen.x),
+      y: Math.round(screen.y),
+      variant
+    });
+  };
+
+  const step = 0.35;
+
+  // 1. East-West Grand Imperial Highway
+  for (let gx = 0; gx < MAP_GRID_WIDTH; gx += step) {
+    const gy = 110 + 22 * Math.sin(gx * 0.045) + 9 * Math.cos(gx * 0.09) + 4 * Math.sin(gx * 0.16);
+    addPoint(gx, gy, gx * 7.13);
+  }
+
+  // 2. North-South Royal Silk Axis
+  for (let gy = 0; gy < MAP_GRID_HEIGHT; gy += step) {
+    const gx = 110 + 22 * Math.sin(gy * 0.045) + 9 * Math.cos(gy * 0.09) + 4 * Math.sin(gy * 0.16);
+    addPoint(gx, gy, gy * 5.41);
+  }
+
+  // 3. Northwest - Southeast Diagonal Route
+  for (let s = 5; s < MAP_GRID_WIDTH - 5; s += step) {
+    const meander = 12 * Math.sin(s * 0.07);
+    const gx = s + meander / 2;
+    const gy = s - meander / 2;
+    addPoint(gx, gy, s * 9.27);
+  }
+
+  // 4. Northeast - Southwest Diagonal Route
+  for (let s = 5; s < MAP_GRID_WIDTH - 5; s += step) {
+    const meander = 12 * Math.sin((s - (220 - s)) * 0.035);
+    const gx = s;
+    const gy = 220 - s + meander;
+    addPoint(gx, gy, s * 3.82);
+  }
+
+  // 5. Central Crossroads Hub Plaza (at 110, 110)
+  for (let r = 0.8; r <= 3.8; r += 1.0) {
+    const count = Math.round(r * 8);
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2;
+      const gx = 110 + r * Math.cos(angle);
+      const gy = 110 + r * Math.sin(angle);
+      addPoint(gx, gy, i * 4.1);
+    }
+  }
+
+  cachedRoadSplinePoints = points;
+  return points;
+}
 
 /**
  * Deterministically checks whether a given (gx, gy) coordinate belongs to a dirt road.

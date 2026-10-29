@@ -17,7 +17,8 @@ import {
   SERVER_TICK_RATE,
   UNIT_BLUEPRINTS,
   UnitBlueprint,
-  UnitType
+  UnitType,
+  isDirtRoadTile
 } from '@chien-quoc/shared';
 import { WorldState } from '../schema/WorldState.js';
 import { PlayerState } from '../schema/PlayerState.js';
@@ -300,9 +301,15 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     const player = this.state.players.get(sessionId);
     if (!player) return;
 
-    // Find a clear area for spawn across large map
+    // Find a clear area for spawn across large map, avoiding roads
     let spawnX = 20 + Math.floor(Math.random() * (MAP_GRID_WIDTH - 40));
     let spawnY = 20 + Math.floor(Math.random() * (MAP_GRID_HEIGHT - 40));
+    let roadAttempts = 0;
+    while (isDirtRoadTile(spawnX, spawnY) && roadAttempts < 50) {
+      spawnX = 20 + Math.floor(Math.random() * (MAP_GRID_WIDTH - 40));
+      spawnY = 20 + Math.floor(Math.random() * (MAP_GRID_HEIGHT - 40));
+      roadAttempts++;
+    }
 
     // Create Town Center
     const tcBlueprint = BUILDING_BLUEPRINTS.TOWN_CENTER;

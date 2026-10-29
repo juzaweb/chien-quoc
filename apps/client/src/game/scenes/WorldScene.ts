@@ -12,7 +12,9 @@ import {
   gridToScreen,
   screenToGrid,
   getIsoDepth,
-  isDirtRoadTile
+  isDirtRoadTile,
+  getAllRoadSplinePoints,
+  RoadSplinePoint
 } from '@chien-quoc/shared';
 import { generateProceduralTextures } from '../renderers/ProceduralSprites.js';
 
@@ -38,6 +40,8 @@ export class WorldScene extends Phaser.Scene {
 
   // Entity visual objects
   private tilePool: Phaser.GameObjects.Image[] = [];
+  private roadStampPool: Phaser.GameObjects.Image[] = [];
+  private allRoadPoints: RoadSplinePoint[] = [];
   private lastViewportX: number = -999999;
   private lastViewportY: number = -999999;
   private lastViewportZoom: number = -1;
@@ -120,17 +124,21 @@ export class WorldScene extends Phaser.Scene {
     this.load.image('res_node_BERRY_BUSH', `/assets/resources/berry.png?${v}`);
 
     // Preload Age of Empires 2 Grass Terrain textures
-    const tv = 'v=6';
+    const tv = 'v=7';
     this.load.image('tile_grass_1', `/assets/terrain/grass_1.png?${tv}`);
     this.load.image('tile_grass_2', `/assets/terrain/grass_2.png?${tv}`);
     this.load.image('tile_grass_3', `/assets/terrain/grass_3.png?${tv}`);
     this.load.image('tile_grass', `/assets/terrain/grass.png?${tv}`);
 
-    // Preload Age of Empires 2 Dirt Road Terrain textures
+    // Preload Age of Empires 2 Dirt Road Terrain textures & organic road stamps
     this.load.image('tile_dirt_1', `/assets/terrain/dirt_1.png?${tv}`);
     this.load.image('tile_dirt_2', `/assets/terrain/dirt_2.png?${tv}`);
     this.load.image('tile_dirt_3', `/assets/terrain/dirt_3.png?${tv}`);
     this.load.image('tile_dirt', `/assets/terrain/dirt.png?${tv}`);
+    this.load.image('road_stamp', `/assets/terrain/road_stamp.png?${tv}`);
+    this.load.image('road_stamp_1', `/assets/terrain/road_stamp_1.png?${tv}`);
+    this.load.image('road_stamp_2', `/assets/terrain/road_stamp_2.png?${tv}`);
+    this.load.image('road_stamp_3', `/assets/terrain/road_stamp_3.png?${tv}`);
   }
 
   create() {
@@ -151,6 +159,19 @@ export class WorldScene extends Phaser.Scene {
       tile.setDepth(-100000);
       tile.setVisible(false);
       this.tilePool.push(tile);
+    }
+
+    // Pre-calculate organic road spline points
+    this.allRoadPoints = getAllRoadSplinePoints();
+
+    // Pre-allocate pooled road stamp images (depth -99990, above grass, below entities)
+    const ROAD_POOL_SIZE = 700;
+    this.roadStampPool = [];
+    for (let i = 0; i < ROAD_POOL_SIZE; i++) {
+      const stamp = this.add.image(0, 0, 'road_stamp_1');
+      stamp.setDepth(-99990);
+      stamp.setVisible(false);
+      this.roadStampPool.push(stamp);
     }
 
     // 2. Cursor hover indicator
@@ -1147,11 +1168,9 @@ export class WorldScene extends Phaser.Scene {
           }
           poolIdx++;
 
-          // Natural AoE 2 terrain selection: Dirt Road vs Lush Meadow Grass
-          const isRoad = isDirtRoadTile(gx, gy);
+          // Natural AoE 2 meadow grass - 100% continuous, zero diamond stair-steps
           const variant = ((gx * 7 + gy * 13) % 3) + 1;
-          const prefix = isRoad ? 'tile_dirt' : 'tile_grass';
-          const texKey = this.textures.exists(`${prefix}_${variant}`) ? `${prefix}_${variant}` : prefix;
+          const texKey = this.textures.exists(`tile_grass_${variant}`) ? `tile_grass_${variant}` : 'tile_grass';
           if (tile.texture.key !== texKey) {
             tile.setTexture(texKey);
           }
@@ -1167,6 +1186,41 @@ export class WorldScene extends Phaser.Scene {
     const totalPooled = this.tilePool.length;
     while (poolIdx < totalPooled) {
       this.tilePool[poolIdx++].setVisible(false);
+    }
+
+    // Render continuous organic AoE dirt roads over seamless grass (zero diamond stair-steps)
+    let roadPoolIdx = 0;
+    const roadMargin = 140;
+    const rLeft = left - roadMargin;
+    const rRight = right + roadMargin;
+    const rTop = top - roadMargin;
+    const rBottom = bottom + roadMargin;
+
+    const roadPointsLen = this.allRoadPoints.length;
+    for (let i = 0; i < roadPointsLen; i++) {
+      const rp = this.allRoadPoints[i];
+      if (rp.x >= rLeft && rp.x <= rRight && rp.y >= rTop && rp.y <= rBottom) {
+        let stamp = this.roadStampPool[roadPoolIdx];
+        if (!stamp) {
+          stamp = this.add.image(0, 0, 'road_stamp');
+          stamp.setDepth(-99990);
+          this.roadStampPool.push(stamp);
+        }
+        roadPoolIdx++;
+
+        const stampKey = `road_stamp_${rp.variant}`;
+        if (stamp.texture.key !== stampKey && this.textures.exists(stampKey)) {
+          stamp.setTexture(stampKey);
+        }
+        stamp.setPosition(rp.x, rp.y);
+        stamp.setVisible(true);
+      }
+    }
+
+    // Hide remaining unused road stamps
+    const totalRoadPooled = this.roadStampPool.length;
+    while (roadPoolIdx < totalRoadPooled) {
+      this.roadStampPool[roadPoolIdx++].setVisible(false);
     }
   }
 
