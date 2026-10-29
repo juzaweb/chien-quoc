@@ -1,7 +1,7 @@
 import { BuildingBlueprint, BuildingType, Resources, UnitBlueprint, UnitType } from '../types/index.js';
 
-export const TILE_WIDTH = 64;
-export const TILE_HEIGHT = 32;
+export const TILE_WIDTH = 128;
+export const TILE_HEIGHT = 64;
 
 export const MAP_GRID_WIDTH = 220;
 export const MAP_GRID_HEIGHT = 220;

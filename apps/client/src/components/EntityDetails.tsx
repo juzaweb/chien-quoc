@@ -35,33 +35,49 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
   return (
     <div className="aoe-panel w-80 min-h-[144px] p-3 rounded-lg flex flex-col gap-2 pointer-events-auto">
       {/* Header Info */}
-      <div className="flex items-center justify-between border-b border-amber-800/40 pb-1.5">
-        <div className="flex items-center gap-2">
-          {entity.subType === 'VILLAGER' ? (
+      <div className="flex items-center justify-between border-b border-amber-800/40 pb-2">
+        <div className="flex items-center gap-2.5">
+          {entity.type === 'unit' && entity.subType ? (
             <img
-              src="/assets/units/villager_idle.png"
-              alt="Villager"
-              className="w-5 h-5 object-contain rounded bg-slate-900/80 border border-amber-500/50"
+              src={`/assets/units/${entity.subType.toLowerCase()}_idle.png?v=3`}
+              alt={entity.name}
+              className="w-10 h-10 object-contain rounded-md bg-slate-900/90 border border-amber-500/60 p-0.5 shadow-md"
+              onError={(e) => {
+                (e.target as HTMLElement).style.display = 'none';
+              }}
             />
           ) : entity.type === 'building' && entity.subType ? (
             <img
-              src={`/assets/buildings/${entity.subType.toLowerCase()}.png`}
+              src={`/assets/buildings/${entity.subType.toLowerCase()}.png?v=3`}
               alt={entity.name}
-              className="w-5 h-5 object-contain rounded bg-slate-900/80 border border-amber-500/50"
+              className="w-10 h-10 object-contain rounded-md bg-slate-900/90 border border-amber-500/60 p-0.5 shadow-md"
+              onError={(e) => {
+                (e.target as HTMLElement).style.display = 'none';
+              }}
+            />
+          ) : entity.type === 'resource' && entity.subType ? (
+            <img
+              src={`/assets/resources/${entity.subType === 'TREE' ? 'tree' : entity.subType === 'GOLD_MINE' ? 'gold' : entity.subType === 'STONE_MINE' ? 'stone' : 'berry'}.png?v=3`}
+              alt={entity.name}
+              className="w-10 h-10 object-contain rounded-md bg-slate-900/90 border border-amber-500/60 p-0.5 shadow-md"
               onError={(e) => {
                 (e.target as HTMLElement).style.display = 'none';
               }}
             />
           ) : (
-            <div className="w-2.5 h-2.5 rounded-sm bg-amber-500" />
+            <div className="w-10 h-10 rounded-md bg-slate-900/90 border border-amber-500/60 flex items-center justify-center text-amber-500 font-bold">
+              ?
+            </div>
           )}
-          <span className="font-medieval text-xs font-bold text-amber-300 truncate max-w-[170px]">
-            {entity.name}
-          </span>
+          <div className="flex flex-col">
+            <span className="font-medieval text-xs font-bold text-amber-300 truncate max-w-[170px]">
+              {entity.name}
+            </span>
+            <span className="text-[10px] text-slate-400 uppercase font-mono tracking-wider">
+              {entity.type}
+            </span>
+          </div>
         </div>
-        <span className="text-[10px] text-slate-400 uppercase font-mono tracking-wider">
-          {entity.type}
-        </span>
       </div>
 
       {/* Health Bar (if applicable) */}
@@ -139,9 +155,14 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
                         : 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
                     }`}
                   >
-                    {uType === 'VILLAGER' && (
-                      <img src="/assets/units/villager_idle.png" alt="Villager" className="w-6 h-6 object-contain" />
-                    )}
+                    <img
+                      src={`/assets/units/${uType.toLowerCase()}_idle.png?v=3`}
+                      alt={uBp.name}
+                      className="w-7 h-7 object-contain rounded bg-slate-900/60 p-0.5 border border-amber-600/40"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
                     <span>{uBp.name}</span>
                   </button>
 

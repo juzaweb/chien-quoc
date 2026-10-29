@@ -18,11 +18,11 @@ const BUILDINGS: { type: BuildingType; icon: React.ReactNode; hotkey: string }[]
 ];
 
 const BUILDING_THUMBNAILS: Record<BuildingType, string> = {
-  TOWN_CENTER: '/assets/buildings/town_center.png',
-  BARRACKS: '/assets/buildings/barracks.png',
-  HOUSE: '/assets/buildings/house.png',
-  FARM: '/assets/buildings/farm.png',
-  TOWER: '/assets/buildings/tower.png'
+  TOWN_CENTER: '/assets/buildings/town_center.png?v=3',
+  BARRACKS: '/assets/buildings/barracks.png?v=3',
+  HOUSE: '/assets/buildings/house.png?v=3',
+  FARM: '/assets/buildings/farm.png?v=3',
+  TOWER: '/assets/buildings/tower.png?v=3'
 };
 
 export const BuildMenu: React.FC<BuildMenuProps> = ({

@@ -7,13 +7,13 @@ import * as Phaser from 'phaser';
 export function generateProceduralTextures(scene: Phaser.Scene) {
   if (scene.textures.exists('tile_grass')) return;
 
-  // 1. Isometric Grass Tile (64x32)
-  createCanvasTexture(scene, 'tile_grass', 64, 32, (ctx) => {
+  // 1. Isometric Grass Tile (128x64 - AoE 2 Definitive Edition standard)
+  createCanvasTexture(scene, 'tile_grass', 128, 64, (ctx) => {
     ctx.beginPath();
-    ctx.moveTo(32, 1);
-    ctx.lineTo(63, 16);
-    ctx.lineTo(32, 31);
-    ctx.lineTo(1, 16);
+    ctx.moveTo(64, 1);
+    ctx.lineTo(127, 32);
+    ctx.lineTo(64, 63);
+    ctx.lineTo(1, 32);
     ctx.closePath();
 
     ctx.fillStyle = '#417a26';
@@ -26,27 +26,27 @@ export function generateProceduralTextures(scene: Phaser.Scene) {
 
     // Light highlights on top edges
     ctx.beginPath();
-    ctx.moveTo(32, 1);
-    ctx.lineTo(63, 16);
+    ctx.moveTo(64, 1);
+    ctx.lineTo(127, 32);
     ctx.strokeStyle = 'rgba(134, 239, 172, 0.25)';
     ctx.stroke();
 
     // Subtle dark shadows on bottom edges
     ctx.beginPath();
-    ctx.moveTo(63, 16);
-    ctx.lineTo(32, 31);
-    ctx.lineTo(1, 16);
+    ctx.moveTo(127, 32);
+    ctx.lineTo(64, 63);
+    ctx.lineTo(1, 32);
     ctx.strokeStyle = 'rgba(20, 83, 45, 0.4)';
     ctx.stroke();
   });
 
-  // 2. Isometric Grid Highlight Tile
-  createCanvasTexture(scene, 'tile_highlight', 64, 32, (ctx) => {
+  // 2. Isometric Grid Highlight Tile (128x64)
+  createCanvasTexture(scene, 'tile_highlight', 128, 64, (ctx) => {
     ctx.beginPath();
-    ctx.moveTo(32, 2);
-    ctx.lineTo(62, 16);
-    ctx.lineTo(32, 30);
-    ctx.lineTo(2, 16);
+    ctx.moveTo(64, 2);
+    ctx.lineTo(126, 32);
+    ctx.lineTo(64, 62);
+    ctx.lineTo(2, 32);
     ctx.closePath();
 
     ctx.fillStyle = 'rgba(250, 204, 21, 0.2)';

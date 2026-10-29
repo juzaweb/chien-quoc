@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Room } from '@colyseus/sdk';
-import { MAP_GRID_HEIGHT, MAP_GRID_WIDTH, screenToGrid } from '@chien-quoc/shared';
+import { MAP_GRID_HEIGHT, MAP_GRID_WIDTH, screenToGrid, TILE_HEIGHT, TILE_WIDTH } from '@chien-quoc/shared';
 import { WorldScene } from '../game/scenes/WorldScene.js';
 
 interface MinimapProps {
@@ -82,8 +82,8 @@ export const Minimap: React.FC<MinimapProps> = ({ room, sceneRef, onPanToGrid })
         if (scene && scene.cameras?.main) {
           const cam = scene.cameras.main;
           const centerGrid = screenToGrid(cam.scrollX + cam.width / 2, cam.scrollY + cam.height / 2);
-          const viewWGrid = (cam.width / cam.zoom) / 64;
-          const viewHGrid = (cam.height / cam.zoom) / 32;
+          const viewWGrid = (cam.width / cam.zoom) / TILE_WIDTH;
+          const viewHGrid = (cam.height / cam.zoom) / TILE_HEIGHT;
 
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 1.5;

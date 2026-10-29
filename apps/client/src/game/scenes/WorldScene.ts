@@ -78,20 +78,45 @@ export class WorldScene extends Phaser.Scene {
   preload() {
     generateProceduralTextures(this);
 
-    // Preload generated assets with fallback support
-    this.load.spritesheet('unit_VILLAGER_sheet', '/assets/units/villager_sheet.png', {
-      frameWidth: 64,
-      frameHeight: 64
+    // Preload generated unit assets with spritesheet & idle frame support (2x resolution)
+    const uv = 'v=3';
+    this.load.spritesheet('unit_VILLAGER_sheet', `/assets/units/villager_sheet.png?${uv}`, {
+      frameWidth: 128,
+      frameHeight: 128
     });
-    this.load.image('unit_VILLAGER_idle', '/assets/units/villager_idle.png');
+    this.load.image('unit_VILLAGER_idle', `/assets/units/villager_idle.png?${uv}`);
 
-    // Preload generated building assets with cache-busting version
-    const v = 'v=2';
+    this.load.spritesheet('unit_SPEARMAN_sheet', `/assets/units/spearman_sheet.png?${uv}`, {
+      frameWidth: 128,
+      frameHeight: 128
+    });
+    this.load.image('unit_SPEARMAN_idle', `/assets/units/spearman_idle.png?${uv}`);
+
+    this.load.spritesheet('unit_ARCHER_sheet', `/assets/units/archer_sheet.png?${uv}`, {
+      frameWidth: 128,
+      frameHeight: 128
+    });
+    this.load.image('unit_ARCHER_idle', `/assets/units/archer_idle.png?${uv}`);
+
+    this.load.spritesheet('unit_CAVALRY_sheet', `/assets/units/cavalry_sheet.png?${uv}`, {
+      frameWidth: 160,
+      frameHeight: 160
+    });
+    this.load.image('unit_CAVALRY_idle', `/assets/units/cavalry_idle.png?${uv}`);
+
+    // Preload generated building assets with cache-busting version (2x resolution)
+    const v = 'v=3';
     this.load.image('building_TOWN_CENTER', `/assets/buildings/town_center.png?${v}`);
     this.load.image('building_BARRACKS', `/assets/buildings/barracks.png?${v}`);
     this.load.image('building_HOUSE', `/assets/buildings/house.png?${v}`);
     this.load.image('building_FARM', `/assets/buildings/farm.png?${v}`);
     this.load.image('building_TOWER', `/assets/buildings/tower.png?${v}`);
+
+    // Preload generated resource node assets with cache-busting version
+    this.load.image('res_node_TREE', `/assets/resources/tree.png?${v}`);
+    this.load.image('res_node_GOLD_MINE', `/assets/resources/gold.png?${v}`);
+    this.load.image('res_node_STONE_MINE', `/assets/resources/stone.png?${v}`);
+    this.load.image('res_node_BERRY_BUSH', `/assets/resources/berry.png?${v}`);
   }
 
   create() {
@@ -241,17 +266,31 @@ export class WorldScene extends Phaser.Scene {
   private createResourceNodeSprite(id: string, node: any) {
     const screenPos = gridToScreen(node.gridX, node.gridY);
     let textureKey = 'res_tree';
-    let offsetY = -20;
+    let offsetY = -42;
 
-    if (node.type === 'GOLD_MINE') {
-      textureKey = 'res_gold';
-      offsetY = -8;
-    } else if (node.type === 'STONE_MINE') {
-      textureKey = 'res_stone';
-      offsetY = -8;
-    } else if (node.type === 'BERRY_BUSH') {
-      textureKey = 'res_berry';
-      offsetY = -8;
+    const customKey = `res_node_${node.type}`;
+    if (this.textures.exists(customKey)) {
+      textureKey = customKey;
+      if (node.type === 'TREE') {
+        offsetY = -84;
+      } else if (node.type === 'GOLD_MINE') {
+        offsetY = -28;
+      } else if (node.type === 'STONE_MINE') {
+        offsetY = -28;
+      } else if (node.type === 'BERRY_BUSH') {
+        offsetY = -28;
+      }
+    } else {
+      if (node.type === 'GOLD_MINE') {
+        textureKey = 'res_gold';
+        offsetY = -16;
+      } else if (node.type === 'STONE_MINE') {
+        textureKey = 'res_stone';
+        offsetY = -16;
+      } else if (node.type === 'BERRY_BUSH') {
+        textureKey = 'res_berry';
+        offsetY = -16;
+      }
     }
 
     const container = this.add.container(screenPos.x, screenPos.y);
@@ -261,6 +300,8 @@ export class WorldScene extends Phaser.Scene {
     container.setDepth(getIsoDepth(node.gridX, node.gridY, 10));
     container.setData('entityId', id);
     container.setData('entityType', 'resource');
+    container.setData('resourceType', node.type);
+    container.setData('visualCenterY', offsetY);
 
     this.resourceSprites.set(id, container);
   }
@@ -272,45 +313,45 @@ export class WorldScene extends Phaser.Scene {
     );
 
     let textureKey = 'b_town_center';
-    let offsetY = -65;
+    let offsetY = -130;
     let scale = 1.0;
 
     const customKey = `building_${building.type}`;
     if (this.textures.exists(customKey)) {
       textureKey = customKey;
       if (building.type === 'TOWN_CENTER') {
-        offsetY = -65;
+        offsetY = -130;
       } else if (building.type === 'BARRACKS') {
-        offsetY = -48;
+        offsetY = -96;
       } else if (building.type === 'HOUSE') {
-        offsetY = -35;
+        offsetY = -70;
       } else if (building.type === 'FARM') {
         offsetY = 0;
       } else if (building.type === 'TOWER') {
-        offsetY = -80;
+        offsetY = -160;
       }
     } else {
       if (building.type === 'BARRACKS') {
         textureKey = 'b_barracks';
-        offsetY = -35;
+        offsetY = -70;
       } else if (building.type === 'HOUSE') {
         textureKey = 'b_house';
-        offsetY = -25;
+        offsetY = -50;
       } else if (building.type === 'FARM') {
         textureKey = 'b_farm';
         offsetY = 0;
       } else if (building.type === 'TOWER') {
         textureKey = 'b_tower';
-        offsetY = -45;
+        offsetY = -90;
       }
     }
 
     const container = this.add.container(screenPos.x, screenPos.y);
 
-    // Age of Empires style foundation highlight on ground
+    // Age of Empires style foundation highlight on ground (2x tile dimensions)
     const foundation = this.add.graphics();
-    const halfW = (building.sizeX * 64) / 2;
-    const halfH = (building.sizeY * 32) / 2;
+    const halfW = (building.sizeX * TILE_WIDTH) / 2;
+    const halfH = (building.sizeY * TILE_HEIGHT) / 2;
     foundation.lineStyle(2, 0x38bdf8, 0.9);
     foundation.beginPath();
     foundation.moveTo(0, -halfH);
@@ -359,15 +400,15 @@ export class WorldScene extends Phaser.Scene {
     if (!hpBar) return;
 
     hpBar.clear();
-    const width = Math.max(52, building.sizeX * 24);
-    const height = 5;
+    const width = Math.max(70, building.sizeX * 36);
+    const height = 6;
 
-    let barY = -75;
-    if (building.type === 'TOWN_CENTER') barY = -185;
-    else if (building.type === 'TOWER') barY = -175;
-    else if (building.type === 'BARRACKS') barY = -135;
-    else if (building.type === 'HOUSE') barY = -95;
-    else if (building.type === 'FARM') barY = -52;
+    let barY = -120;
+    if (building.type === 'TOWN_CENTER') barY = -370;
+    else if (building.type === 'TOWER') barY = -350;
+    else if (building.type === 'BARRACKS') barY = -270;
+    else if (building.type === 'HOUSE') barY = -190;
+    else if (building.type === 'FARM') barY = -100;
 
     // Background
     hpBar.fillStyle(0x0f172a, 0.85);
@@ -391,64 +432,81 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private initUnitAnimations() {
-    if (this.textures.exists('unit_VILLAGER_sheet')) {
-      if (!this.anims.exists('villager_idle')) {
+    const registerAnim = (key: string, texture: string, frames: number[], frameRate: number, repeat: number = -1) => {
+      if (this.textures.exists(texture) && !this.anims.exists(key)) {
         this.anims.create({
-          key: 'villager_idle',
-          frames: this.anims.generateFrameNumbers('unit_VILLAGER_sheet', { start: 0, end: 0 }),
-          frameRate: 1,
-          repeat: -1
+          key,
+          frames: this.anims.generateFrameNumbers(texture, { frames }),
+          frameRate,
+          repeat
         });
       }
-      if (!this.anims.exists('villager_walk')) {
-        this.anims.create({
-          key: 'villager_walk',
-          frames: this.anims.generateFrameNumbers('unit_VILLAGER_sheet', { start: 1, end: 4 }),
-          frameRate: 8,
-          repeat: -1
-        });
-      }
-      if (!this.anims.exists('villager_harvest')) {
-        this.anims.create({
-          key: 'villager_harvest',
-          frames: this.anims.generateFrameNumbers('unit_VILLAGER_sheet', { start: 5, end: 6 }),
-          frameRate: 4,
-          repeat: -1
-        });
-      }
-    }
+    };
+
+    // Villager
+    registerAnim('villager_idle', 'unit_VILLAGER_sheet', [0], 1);
+    registerAnim('villager_walk', 'unit_VILLAGER_sheet', [0, 1, 2, 1], 6);
+    registerAnim('villager_harvest', 'unit_VILLAGER_sheet', [3, 0], 3);
+
+    // Spearman
+    registerAnim('spearman_idle', 'unit_SPEARMAN_sheet', [0], 1);
+    registerAnim('spearman_walk', 'unit_SPEARMAN_sheet', [0, 1, 2, 1], 6);
+    registerAnim('spearman_attack', 'unit_SPEARMAN_sheet', [0, 3, 0], 5);
+
+    // Archer
+    registerAnim('archer_idle', 'unit_ARCHER_sheet', [0], 1);
+    registerAnim('archer_walk', 'unit_ARCHER_sheet', [0, 1, 2, 1], 6);
+    registerAnim('archer_attack', 'unit_ARCHER_sheet', [0, 3, 0], 4);
+
+    // Cavalry
+    registerAnim('cavalry_idle', 'unit_CAVALRY_sheet', [0], 1);
+    registerAnim('cavalry_walk', 'unit_CAVALRY_sheet', [0, 1, 2, 1], 8);
+    registerAnim('cavalry_attack', 'unit_CAVALRY_sheet', [0, 3, 0], 6);
   }
 
   private createUnitSprite(id: string, unit: any, cb?: any) {
     const screenPos = gridToScreen(unit.x, unit.y);
     const container = this.add.container(screenPos.x, screenPos.y);
 
-    const hasVillagerSheet = unit.type === 'VILLAGER' && this.textures.exists('unit_VILLAGER_sheet');
-    let unitDisplay: Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;
+    const unitType = (unit.type || 'VILLAGER') as string;
+    const lowerType = unitType.toLowerCase();
+    const sheetKey = `unit_${unitType}_sheet`;
+    const idleKey = `unit_${unitType}_idle`;
+    const hasSheet = this.textures.exists(sheetKey);
 
-    if (hasVillagerSheet) {
-      // 64x64 frame anchored bottom, scaled to 0.72x for AoE realistic human-to-building proportions
-      const sprite = this.add.sprite(0, -20, 'unit_VILLAGER_sheet', 0);
-      sprite.setScale(0.72);
-      if (this.anims.exists('villager_idle')) {
-        sprite.play('villager_idle');
+    let unitDisplay: Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;
+    const isCavalry = unitType === 'CAVALRY';
+    const visualOffsetY = isCavalry ? -52 : -40;
+    const visualScale = isCavalry ? 0.75 : 0.72;
+
+    if (hasSheet) {
+      const sprite = this.add.sprite(0, visualOffsetY, sheetKey, 0);
+      sprite.setScale(visualScale);
+      const idleAnim = `${lowerType}_idle`;
+      if (this.anims.exists(idleAnim)) {
+        sprite.play(idleAnim);
       }
       unitDisplay = sprite;
+    } else if (this.textures.exists(idleKey)) {
+      unitDisplay = this.add.image(0, visualOffsetY, idleKey);
+      unitDisplay.setScale(visualScale);
     } else {
-      const textureKey = `unit_${unit.type}`;
-      unitDisplay = this.add.image(0, -14, textureKey);
+      const fallbackKey = `unit_${unitType}`;
+      unitDisplay = this.add.image(0, visualOffsetY, fallbackKey);
       unitDisplay.setScale(0.75);
     }
 
     container.add(unitDisplay);
     container.setData('unitDisplay', unitDisplay);
 
-    // Selected indicator ring (AoE ground ellipse under feet)
+    // Selected indicator ring (AoE ground ellipse under feet, scaled for 128x64 tiles)
     const selectRing = this.add.graphics();
-    selectRing.lineStyle(1.5, 0x38bdf8, 0.9);
-    selectRing.strokeEllipse(0, 0, 16, 8);
+    selectRing.lineStyle(2, 0x38bdf8, 0.9);
+    const ringRadiusX = isCavalry ? 40 : 26;
+    const ringRadiusY = isCavalry ? 20 : 13;
+    selectRing.strokeEllipse(0, 0, ringRadiusX, ringRadiusY);
     selectRing.fillStyle(0x0284c7, 0.2);
-    selectRing.fillEllipse(0, 0, 16, 8);
+    selectRing.fillEllipse(0, 0, ringRadiusX, ringRadiusY);
     selectRing.setVisible(false);
     container.add(selectRing);
     container.setData('selectRing', selectRing);
@@ -466,18 +524,26 @@ export class WorldScene extends Phaser.Scene {
     this.unitTargetPositions.set(id, { x: unit.x, y: unit.y, hp: unit.hp, maxHp: unit.maxHp });
 
     const updateVisualState = (actionState: string) => {
-      if (hasVillagerSheet && unitDisplay instanceof Phaser.GameObjects.Sprite) {
+      if (hasSheet && unitDisplay instanceof Phaser.GameObjects.Sprite) {
         if (actionState === 'MOVING') {
-          if (unitDisplay.anims.currentAnim?.key !== 'villager_walk') {
-            unitDisplay.play('villager_walk');
+          const walkAnim = `${lowerType}_walk`;
+          if (this.anims.exists(walkAnim) && unitDisplay.anims.currentAnim?.key !== walkAnim) {
+            unitDisplay.play(walkAnim);
           }
         } else if (actionState === 'HARVESTING') {
-          if (unitDisplay.anims.currentAnim?.key !== 'villager_harvest') {
-            unitDisplay.play('villager_harvest');
+          const harvestAnim = 'villager_harvest';
+          if (this.anims.exists(harvestAnim) && unitDisplay.anims.currentAnim?.key !== harvestAnim) {
+            unitDisplay.play(harvestAnim);
+          }
+        } else if (actionState === 'ATTACKING') {
+          const attackAnim = `${lowerType}_attack`;
+          if (this.anims.exists(attackAnim) && unitDisplay.anims.currentAnim?.key !== attackAnim) {
+            unitDisplay.play(attackAnim);
           }
         } else {
-          if (unitDisplay.anims.currentAnim?.key !== 'villager_idle') {
-            unitDisplay.play('villager_idle');
+          const idleAnim = `${lowerType}_idle`;
+          if (this.anims.exists(idleAnim) && unitDisplay.anims.currentAnim?.key !== idleAnim) {
+            unitDisplay.play(idleAnim);
           }
         }
       }
@@ -488,20 +554,20 @@ export class WorldScene extends Phaser.Scene {
     if (cb) {
       cb.onChange(unit, () => {
         this.unitTargetPositions.set(id, { x: unit.x, y: unit.y, hp: unit.hp, maxHp: unit.maxHp });
-        this.updateUnitBar(container, unit.hp, unit.maxHp);
+        this.updateUnitBar(container, unit.hp, unit.maxHp, isCavalry);
         updateVisualState(unit.actionState);
       });
     }
   }
 
-  private updateUnitBar(container: Phaser.GameObjects.Container, hp: number, maxHp: number) {
+  private updateUnitBar(container: Phaser.GameObjects.Container, hp: number, maxHp: number, isCavalry: boolean = false) {
     const hpBar = container.getData('hpBar') as Phaser.GameObjects.Graphics;
     if (!hpBar) return;
 
     hpBar.clear();
-    const width = 24;
-    const height = 3;
-    const barY = -34;
+    const width = isCavalry ? 50 : 38;
+    const height = 4;
+    const barY = isCavalry ? -84 : -68;
 
     hpBar.fillStyle(0x0f172a, 0.8);
     hpBar.fillRect(-width / 2, barY, width, height);
@@ -705,11 +771,19 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    // Check click on resources
+    // Check click on resources (first check visual sprite distance, fallback to grid)
     let clickedResId: string | null = null;
     if (this.room) {
       this.room.state.resourceNodes.forEach((res: any, resId: string) => {
-        if (res.gridX === clickGrid.gridX && res.gridY === clickGrid.gridY) {
+        if (clickedResId) return;
+        const resSprite = this.resourceSprites.get(resId);
+        if (resSprite) {
+          const centerY = res.type === 'TREE' ? resSprite.y - 45 : resSprite.y - 18;
+          if (Math.hypot(worldPoint.x - resSprite.x, worldPoint.y - centerY) < 38) {
+            clickedResId = resId;
+          }
+        }
+        if (!clickedResId && res.gridX === clickGrid.gridX && res.gridY === clickGrid.gridY) {
           clickedResId = resId;
         }
       });
@@ -827,7 +901,15 @@ export class WorldScene extends Phaser.Scene {
     // 3. Check if right-clicked on a resource node (harvest command)
     let targetResourceNodeId: string | null = null;
     this.room.state.resourceNodes.forEach((res: any, resId: string) => {
-      if (res.gridX === targetGrid.gridX && res.gridY === targetGrid.gridY) {
+      if (targetResourceNodeId) return;
+      const resSprite = this.resourceSprites.get(resId);
+      if (resSprite) {
+        const centerY = res.type === 'TREE' ? resSprite.y - 45 : resSprite.y - 18;
+        if (Math.hypot(worldPoint.x - resSprite.x, worldPoint.y - centerY) < 38) {
+          targetResourceNodeId = resId;
+        }
+      }
+      if (!targetResourceNodeId && res.gridX === targetGrid.gridX && res.gridY === targetGrid.gridY) {
         targetResourceNodeId = resId;
       }
     });
@@ -872,36 +954,36 @@ export class WorldScene extends Phaser.Scene {
     this.notifySelectionChange();
 
     let textureKey = 'b_town_center';
-    let offsetY = -65;
+    let offsetY = -130;
     let scale = 1.0;
 
     const customKey = `building_${type}`;
     if (this.textures.exists(customKey)) {
       textureKey = customKey;
       if (type === 'TOWN_CENTER') {
-        offsetY = -65;
+        offsetY = -130;
       } else if (type === 'BARRACKS') {
-        offsetY = -48;
+        offsetY = -96;
       } else if (type === 'HOUSE') {
-        offsetY = -35;
+        offsetY = -70;
       } else if (type === 'FARM') {
         offsetY = 0;
       } else if (type === 'TOWER') {
-        offsetY = -80;
+        offsetY = -160;
       }
     } else {
       if (type === 'BARRACKS') {
         textureKey = 'b_barracks';
-        offsetY = -35;
+        offsetY = -70;
       } else if (type === 'HOUSE') {
         textureKey = 'b_house';
-        offsetY = -25;
+        offsetY = -50;
       } else if (type === 'FARM') {
         textureKey = 'b_farm';
         offsetY = 0;
       } else if (type === 'TOWER') {
         textureKey = 'b_tower';
-        offsetY = -45;
+        offsetY = -90;
       }
     }
 
