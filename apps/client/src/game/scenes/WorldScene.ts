@@ -85,12 +85,13 @@ export class WorldScene extends Phaser.Scene {
     });
     this.load.image('unit_VILLAGER_idle', '/assets/units/villager_idle.png');
 
-    // Preload generated building assets
-    this.load.image('building_TOWN_CENTER', '/assets/buildings/town_center.png');
-    this.load.image('building_BARRACKS', '/assets/buildings/barracks.png');
-    this.load.image('building_HOUSE', '/assets/buildings/house.png');
-    this.load.image('building_FARM', '/assets/buildings/farm.png');
-    this.load.image('building_TOWER', '/assets/buildings/tower.png');
+    // Preload generated building assets with cache-busting version
+    const v = 'v=2';
+    this.load.image('building_TOWN_CENTER', `/assets/buildings/town_center.png?${v}`);
+    this.load.image('building_BARRACKS', `/assets/buildings/barracks.png?${v}`);
+    this.load.image('building_HOUSE', `/assets/buildings/house.png?${v}`);
+    this.load.image('building_FARM', `/assets/buildings/farm.png?${v}`);
+    this.load.image('building_TOWER', `/assets/buildings/tower.png?${v}`);
   }
 
   create() {
@@ -101,7 +102,7 @@ export class WorldScene extends Phaser.Scene {
     this.initUnitAnimations();
 
     // 1. Pre-allocate pooled terrain tile images for 60 FPS viewport rendering across 220x220 map
-    const POOL_SIZE = 3500;
+    const POOL_SIZE = 6000;
     this.tilePool = [];
     for (let i = 0; i < POOL_SIZE; i++) {
       const tile = this.add.image(0, 0, 'tile_grass');
@@ -1010,7 +1011,7 @@ export class WorldScene extends Phaser.Scene {
     this.lastViewportZoom = cam.zoom;
 
     // Expand margin to prevent edge pop-in during fast scrolling
-    const margin = 96;
+    const margin = 160;
     const left = view.left - margin;
     const right = view.right + margin;
     const top = view.top - margin;
@@ -1021,13 +1022,12 @@ export class WorldScene extends Phaser.Scene {
     const cBottomLeft = screenToGrid(left, bottom);
     const cBottomRight = screenToGrid(right, bottom);
 
-    const minGx = Math.max(0, Math.min(cTopLeft.gridX, cTopRight.gridX, cBottomLeft.gridX, cBottomRight.gridX) - 2);
-    const maxGx = Math.min(MAP_GRID_WIDTH - 1, Math.max(cTopLeft.gridX, cTopRight.gridX, cBottomLeft.gridX, cBottomRight.gridX) + 2);
-    const minGy = Math.max(0, Math.min(cTopLeft.gridY, cTopRight.gridY, cBottomLeft.gridY, cBottomRight.gridY) - 2);
-    const maxGy = Math.min(MAP_GRID_HEIGHT - 1, Math.max(cTopLeft.gridY, cTopRight.gridY, cBottomLeft.gridY, cBottomRight.gridY) + 2);
+    const minGx = Math.max(0, Math.min(cTopLeft.gridX, cTopRight.gridX, cBottomLeft.gridX, cBottomRight.gridX) - 3);
+    const maxGx = Math.min(MAP_GRID_WIDTH - 1, Math.max(cTopLeft.gridX, cTopRight.gridX, cBottomLeft.gridX, cBottomRight.gridX) + 3);
+    const minGy = Math.max(0, Math.min(cTopLeft.gridY, cTopRight.gridY, cBottomLeft.gridY, cBottomRight.gridY) - 3);
+    const maxGy = Math.min(MAP_GRID_HEIGHT - 1, Math.max(cTopLeft.gridY, cTopRight.gridY, cBottomLeft.gridY, cBottomRight.gridY) + 3);
 
     let poolIdx = 0;
-    const poolLen = this.tilePool.length;
 
     for (let gy = minGy; gy <= maxGy; gy++) {
       for (let gx = minGx; gx <= maxGx; gx++) {
@@ -1039,25 +1039,32 @@ export class WorldScene extends Phaser.Scene {
           screenPos.y >= top &&
           screenPos.y <= bottom
         ) {
-          if (poolIdx < poolLen) {
-            const tile = this.tilePool[poolIdx++];
-            tile.setPosition(screenPos.x, screenPos.y);
-            tile.setVisible(true);
-
-            // Subtle organic terrain shading
-            const shade = (gx * 17 + gy * 31) % 5;
-            if (shade === 0) tile.setTint(0xedf8eb);
-            else if (shade === 1) tile.setTint(0xf7fdf5);
-            else if (shade === 2) tile.setTint(0xe2f0df);
-            else if (shade === 3) tile.setTint(0xd9ecd6);
-            else tile.clearTint();
+          // Dynamically allocate from pool, expanding on demand if screen is large or zoomed out
+          let tile = this.tilePool[poolIdx];
+          if (!tile) {
+            tile = this.add.image(0, 0, 'tile_grass');
+            tile.setDepth(-100000);
+            this.tilePool.push(tile);
           }
+          poolIdx++;
+
+          tile.setPosition(screenPos.x, screenPos.y);
+          tile.setVisible(true);
+
+          // Subtle organic terrain shading
+          const shade = (gx * 17 + gy * 31) % 5;
+          if (shade === 0) tile.setTint(0xedf8eb);
+          else if (shade === 1) tile.setTint(0xf7fdf5);
+          else if (shade === 2) tile.setTint(0xe2f0df);
+          else if (shade === 3) tile.setTint(0xd9ecd6);
+          else tile.clearTint();
         }
       }
     }
 
     // Hide remaining unused tiles
-    while (poolIdx < poolLen) {
+    const totalPooled = this.tilePool.length;
+    while (poolIdx < totalPooled) {
       this.tilePool[poolIdx++].setVisible(false);
     }
   }
