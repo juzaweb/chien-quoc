@@ -3,8 +3,8 @@ import { BuildingBlueprint, BuildingType, Resources, UnitBlueprint, UnitType } f
 export const TILE_WIDTH = 64;
 export const TILE_HEIGHT = 32;
 
-export const MAP_GRID_WIDTH = 60;
-export const MAP_GRID_HEIGHT = 60;
+export const MAP_GRID_WIDTH = 220;
+export const MAP_GRID_HEIGHT = 220;
 
 export const SERVER_TICK_RATE = 20; // 20 ticks per second (50ms per tick)
 
@@ -23,8 +23,8 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
   TOWN_CENTER: {
     type: 'TOWN_CENTER',
     name: 'Town Center',
-    sizeX: 3,
-    sizeY: 3,
+    sizeX: 4,
+    sizeY: 4,
     cost: { wood: 275, food: 0, gold: 0, stone: 100 },
     buildTimeMs: 15000,
     maxHp: 2400,
@@ -35,8 +35,8 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
   BARRACKS: {
     type: 'BARRACKS',
     name: 'Barracks',
-    sizeX: 2,
-    sizeY: 2,
+    sizeX: 3,
+    sizeY: 3,
     cost: { wood: 175, food: 0, gold: 0, stone: 0 },
     buildTimeMs: 10000,
     maxHp: 1200,
@@ -47,8 +47,8 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
   HOUSE: {
     type: 'HOUSE',
     name: 'House',
-    sizeX: 1,
-    sizeY: 1,
+    sizeX: 2,
+    sizeY: 2,
     cost: { wood: 50, food: 0, gold: 0, stone: 0 },
     buildTimeMs: 5000,
     maxHp: 450,
@@ -59,8 +59,8 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
   FARM: {
     type: 'FARM',
     name: 'Farm',
-    sizeX: 2,
-    sizeY: 2,
+    sizeX: 3,
+    sizeY: 3,
     cost: { wood: 60, food: 0, gold: 0, stone: 0 },
     buildTimeMs: 6000,
     maxHp: 400,

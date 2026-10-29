@@ -79,9 +79,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
   private async initializeWorldPersistence() {
     try {
-      // 1. Load resources from SQLite
+      // 1. Load resources from SQLite (regenerate if old snapshot is from small 60x60 map)
       const savedResources = await DatabaseService.loadResources();
-      if (savedResources && savedResources.length > 0) {
+      const maxStoredCoord = (savedResources || []).reduce((max, r) => Math.max(max, r.gridX, r.gridY), 0);
+      const isOutdatedMap = !savedResources || savedResources.length < 500 || maxStoredCoord < 100;
+
+      if (!isOutdatedMap && savedResources.length > 0) {
         for (const res of savedResources) {
           const node = new ResourceNodeState();
           node.id = res.id;
@@ -95,10 +98,13 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         }
         console.log(`📦 [WorldRoom] Restored ${savedResources.length} resource nodes from database.`);
       } else {
+        console.log(`🗺️ [WorldRoom] Regenerating fresh resource clusters across entire 220x220 world map...`);
+        await DatabaseService.clearAllResources();
         this.generateWorldResources();
         const resArray: ResourceNodeState[] = [];
         this.state.resourceNodes.forEach((node: ResourceNodeState) => resArray.push(node));
         await DatabaseService.saveAllResources(resArray);
+        console.log(`✨ [WorldRoom] Saved ${resArray.length} fresh resource clusters to database.`);
       }
 
       // 2. Restore all saved player empires from SQLite
@@ -145,37 +151,72 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   private generateWorldResources() {
-    // Generate scattered forests, gold mines, stone quarries, berry bushes
-    const clusters = [
-      { type: 'TREE', res: 'wood', amount: 200, count: 60 },
-      { type: 'GOLD_MINE', res: 'gold', amount: 800, count: 18 },
-      { type: 'STONE_MINE', res: 'stone', amount: 600, count: 14 },
-      { type: 'BERRY_BUSH', res: 'food', amount: 150, count: 24 }
-    ];
+    // Generate expansive natural AoE-style resource clusters for 220x220 Large Map
+    const occupiedTiles = new Set<string>();
 
-    for (const cluster of clusters) {
-      for (let i = 0; i < cluster.count; i++) {
-        const id = `res_${++this.nextEntityId}`;
-        const node = new ResourceNodeState();
-        node.id = id;
-        node.type = cluster.type;
-        node.resourceType = cluster.res;
-        node.gridX = Math.floor(4 + Math.random() * (MAP_GRID_WIDTH - 8));
-        node.gridY = Math.floor(4 + Math.random() * (MAP_GRID_HEIGHT - 8));
-        node.remainingAmount = cluster.amount;
-        node.maxAmount = cluster.amount;
+    const spawnNode = (type: string, res: 'wood' | 'food' | 'gold' | 'stone', gx: number, gy: number, amount: number) => {
+      if (gx < 5 || gx >= MAP_GRID_WIDTH - 5 || gy < 5 || gy >= MAP_GRID_HEIGHT - 5) return;
+      const key = `${gx},${gy}`;
+      if (occupiedTiles.has(key)) return;
 
-        // Check tile occupancy
-        let occupied = false;
-        this.state.resourceNodes.forEach((existing: ResourceNodeState) => {
-          if (existing.gridX === node.gridX && existing.gridY === node.gridY) {
-            occupied = true;
-          }
-        });
+      occupiedTiles.add(key);
+      const id = `res_${++this.nextEntityId}`;
+      const node = new ResourceNodeState();
+      node.id = id;
+      node.type = type;
+      node.resourceType = res;
+      node.gridX = gx;
+      node.gridY = gy;
+      node.remainingAmount = amount;
+      node.maxAmount = amount;
+      this.state.resourceNodes.set(id, node);
+    };
 
-        if (!occupied) {
-          this.state.resourceNodes.set(id, node);
-        }
+    // 1. Forest Groves (85 dense forest clusters, 12-16 trees each)
+    for (let c = 0; c < 85; c++) {
+      const cx = Math.floor(8 + Math.random() * (MAP_GRID_WIDTH - 16));
+      const cy = Math.floor(8 + Math.random() * (MAP_GRID_HEIGHT - 16));
+      const treeCount = 12 + Math.floor(Math.random() * 5);
+      for (let t = 0; t < treeCount; t++) {
+        const dx = Math.floor(Math.random() * 5) - 2;
+        const dy = Math.floor(Math.random() * 5) - 2;
+        spawnNode('TREE', 'wood', cx + dx, cy + dy, 200);
+      }
+    }
+
+    // 2. Gold Veins (40 clusters, 3-5 gold nodes each)
+    for (let c = 0; c < 40; c++) {
+      const cx = Math.floor(10 + Math.random() * (MAP_GRID_WIDTH - 20));
+      const cy = Math.floor(10 + Math.random() * (MAP_GRID_HEIGHT - 20));
+      const nodeCount = 3 + Math.floor(Math.random() * 3);
+      for (let n = 0; n < nodeCount; n++) {
+        const dx = Math.floor(Math.random() * 3) - 1;
+        const dy = Math.floor(Math.random() * 3) - 1;
+        spawnNode('GOLD_MINE', 'gold', cx + dx, cy + dy, 800);
+      }
+    }
+
+    // 3. Stone Quarries (32 clusters, 3-4 stone nodes each)
+    for (let c = 0; c < 32; c++) {
+      const cx = Math.floor(10 + Math.random() * (MAP_GRID_WIDTH - 20));
+      const cy = Math.floor(10 + Math.random() * (MAP_GRID_HEIGHT - 20));
+      const nodeCount = 3 + Math.floor(Math.random() * 2);
+      for (let n = 0; n < nodeCount; n++) {
+        const dx = Math.floor(Math.random() * 3) - 1;
+        const dy = Math.floor(Math.random() * 3) - 1;
+        spawnNode('STONE_MINE', 'stone', cx + dx, cy + dy, 600);
+      }
+    }
+
+    // 4. Berry Groves (40 patches, 4-6 bushes each)
+    for (let c = 0; c < 40; c++) {
+      const cx = Math.floor(10 + Math.random() * (MAP_GRID_WIDTH - 20));
+      const cy = Math.floor(10 + Math.random() * (MAP_GRID_HEIGHT - 20));
+      const bushCount = 4 + Math.floor(Math.random() * 3);
+      for (let b = 0; b < bushCount; b++) {
+        const dx = Math.floor(Math.random() * 3) - 1;
+        const dy = Math.floor(Math.random() * 3) - 1;
+        spawnNode('BERRY_BUSH', 'food', cx + dx, cy + dy, 150);
       }
     }
   }
@@ -259,9 +300,9 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     const player = this.state.players.get(sessionId);
     if (!player) return;
 
-    // Find a clear area for spawn
-    let spawnX = 10 + Math.floor(Math.random() * (MAP_GRID_WIDTH - 20));
-    let spawnY = 10 + Math.floor(Math.random() * (MAP_GRID_HEIGHT - 20));
+    // Find a clear area for spawn across large map
+    let spawnX = 20 + Math.floor(Math.random() * (MAP_GRID_WIDTH - 40));
+    let spawnY = 20 + Math.floor(Math.random() * (MAP_GRID_HEIGHT - 40));
 
     // Create Town Center
     const tcBlueprint = BUILDING_BLUEPRINTS.TOWN_CENTER;
@@ -281,11 +322,50 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     this.state.buildings.set(tcId, townCenter);
 
-    // Spawn 3 starter villagers near Town Center
+    // Spawn starter trees near Town Center (AoE starter woodline)
+    const starterTreeOffsets = [
+      { dx: -2, dy: -1 },
+      { dx: -2, dy: 0 },
+      { dx: -1, dy: -2 },
+      { dx: 0, dy: -2 }
+    ];
+    starterTreeOffsets.forEach((off) => {
+      const id = `res_${++this.nextEntityId}`;
+      const node = new ResourceNodeState();
+      node.id = id;
+      node.type = 'TREE';
+      node.resourceType = 'wood';
+      node.gridX = spawnX + off.dx;
+      node.gridY = spawnY + off.dy;
+      node.remainingAmount = 200;
+      node.maxAmount = 200;
+      this.state.resourceNodes.set(id, node);
+    });
+
+    // Spawn starter berry bushes near Town Center (AoE starter forage food)
+    const starterBerryOffsets = [
+      { dx: 5, dy: 1 },
+      { dx: 6, dy: 1 },
+      { dx: 5, dy: 2 }
+    ];
+    starterBerryOffsets.forEach((off) => {
+      const id = `res_${++this.nextEntityId}`;
+      const node = new ResourceNodeState();
+      node.id = id;
+      node.type = 'BERRY_BUSH';
+      node.resourceType = 'food';
+      node.gridX = spawnX + off.dx;
+      node.gridY = spawnY + off.dy;
+      node.remainingAmount = 150;
+      node.maxAmount = 150;
+      this.state.resourceNodes.set(id, node);
+    });
+
+    // Spawn 3 starter villagers outside 4x4 Town Center
     const villagerOffsets = [
-      { dx: 3, dy: 1 },
-      { dx: 1, dy: 3 },
-      { dx: 3, dy: 2 }
+      { dx: 4, dy: 1 },
+      { dx: 1, dy: 4 },
+      { dx: 4, dy: 2 }
     ];
 
     villagerOffsets.forEach((off, idx) => {

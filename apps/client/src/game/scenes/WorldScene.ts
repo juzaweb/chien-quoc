@@ -36,7 +36,10 @@ export class WorldScene extends Phaser.Scene {
   private wasdKeys!: { [key: string]: Phaser.Input.Keyboard.Key };
 
   // Entity visual objects
-  private terrainGroup!: Phaser.GameObjects.Group;
+  private tilePool: Phaser.GameObjects.Image[] = [];
+  private lastViewportX: number = -999999;
+  private lastViewportY: number = -999999;
+  private lastViewportZoom: number = -1;
   private buildingSprites: Map<string, Phaser.GameObjects.Container> = new Map();
   private unitSprites: Map<string, Phaser.GameObjects.Container> = new Map();
   private resourceSprites: Map<string, Phaser.GameObjects.Container> = new Map();
@@ -57,6 +60,7 @@ export class WorldScene extends Phaser.Scene {
   public selectedUnitIds: Set<string> = new Set();
   public selectedBuildingId: string | null = null;
   public selectedResourceId: string | null = null;
+  private hasCenteredOnSpawn: boolean = false;
 
   // Selection Drag Box
   private isDragSelecting: boolean = false;
@@ -80,6 +84,13 @@ export class WorldScene extends Phaser.Scene {
       frameHeight: 64
     });
     this.load.image('unit_VILLAGER_idle', '/assets/units/villager_idle.png');
+
+    // Preload generated building assets
+    this.load.image('building_TOWN_CENTER', '/assets/buildings/town_center.png');
+    this.load.image('building_BARRACKS', '/assets/buildings/barracks.png');
+    this.load.image('building_HOUSE', '/assets/buildings/house.png');
+    this.load.image('building_FARM', '/assets/buildings/farm.png');
+    this.load.image('building_TOWER', '/assets/buildings/tower.png');
   }
 
   create() {
@@ -89,17 +100,14 @@ export class WorldScene extends Phaser.Scene {
     // Register unit animations if spritesheets are loaded
     this.initUnitAnimations();
 
-    // 1. Render Isometric Terrain
-    this.terrainGroup = this.add.group();
-    for (let gy = 0; gy < MAP_GRID_HEIGHT; gy++) {
-      for (let gx = 0; gx < MAP_GRID_WIDTH; gx++) {
-        const screenPos = gridToScreen(gx, gy);
-        const tile = this.add.image(screenPos.x, screenPos.y, 'tile_grass');
-        tile.setDepth(-100000 + (gx + gy));
-        tile.setData('gridX', gx);
-        tile.setData('gridY', gy);
-        this.terrainGroup.add(tile);
-      }
+    // 1. Pre-allocate pooled terrain tile images for 60 FPS viewport rendering across 220x220 map
+    const POOL_SIZE = 3500;
+    this.tilePool = [];
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const tile = this.add.image(0, 0, 'tile_grass');
+      tile.setDepth(-100000);
+      tile.setVisible(false);
+      this.tilePool.push(tile);
     }
 
     // 2. Cursor hover indicator
@@ -130,7 +138,7 @@ export class WorldScene extends Phaser.Scene {
       }) as any;
     }
 
-    // Initial camera position centered on map
+    // Initial camera position centered on map - normal 1.0 zoom
     const center = gridToScreen(MAP_GRID_WIDTH / 2, MAP_GRID_HEIGHT / 2);
     this.cameras.main.centerOn(center.x, center.y);
     this.cameras.main.setZoom(1.0);
@@ -159,6 +167,9 @@ export class WorldScene extends Phaser.Scene {
     if (this.room) {
       this.bindRoomEvents(this.room);
     }
+
+    // Initial viewport terrain render
+    this.updateViewportTerrain();
   }
 
   public setRoom(room: Room) {
@@ -188,6 +199,11 @@ export class WorldScene extends Phaser.Scene {
     // 2. Synchronize Buildings
     cb.onAdd('buildings', (building: any, key: any) => {
       this.createBuildingSprite(key, building, cb);
+      if (building.ownerId === this.mySessionId && building.type === 'TOWN_CENTER' && !this.hasCenteredOnSpawn) {
+        this.hasCenteredOnSpawn = true;
+        const screenPos = gridToScreen(building.gridX + 1.5, building.gridY + 1.5);
+        this.cameras.main.centerOn(screenPos.x, screenPos.y);
+      }
     });
 
     cb.onRemove('buildings', (building: any, key: any) => {
@@ -255,24 +271,61 @@ export class WorldScene extends Phaser.Scene {
     );
 
     let textureKey = 'b_town_center';
-    let offsetY = -40;
+    let offsetY = -65;
+    let scale = 1.0;
 
-    if (building.type === 'BARRACKS') {
-      textureKey = 'b_barracks';
-      offsetY = -28;
-    } else if (building.type === 'HOUSE') {
-      textureKey = 'b_house';
-      offsetY = -18;
-    } else if (building.type === 'FARM') {
-      textureKey = 'b_farm';
-      offsetY = 0;
-    } else if (building.type === 'TOWER') {
-      textureKey = 'b_tower';
-      offsetY = -35;
+    const customKey = `building_${building.type}`;
+    if (this.textures.exists(customKey)) {
+      textureKey = customKey;
+      if (building.type === 'TOWN_CENTER') {
+        offsetY = -65;
+      } else if (building.type === 'BARRACKS') {
+        offsetY = -48;
+      } else if (building.type === 'HOUSE') {
+        offsetY = -35;
+      } else if (building.type === 'FARM') {
+        offsetY = 0;
+      } else if (building.type === 'TOWER') {
+        offsetY = -80;
+      }
+    } else {
+      if (building.type === 'BARRACKS') {
+        textureKey = 'b_barracks';
+        offsetY = -35;
+      } else if (building.type === 'HOUSE') {
+        textureKey = 'b_house';
+        offsetY = -25;
+      } else if (building.type === 'FARM') {
+        textureKey = 'b_farm';
+        offsetY = 0;
+      } else if (building.type === 'TOWER') {
+        textureKey = 'b_tower';
+        offsetY = -45;
+      }
     }
 
     const container = this.add.container(screenPos.x, screenPos.y);
+
+    // Age of Empires style foundation highlight on ground
+    const foundation = this.add.graphics();
+    const halfW = (building.sizeX * 64) / 2;
+    const halfH = (building.sizeY * 32) / 2;
+    foundation.lineStyle(2, 0x38bdf8, 0.9);
+    foundation.beginPath();
+    foundation.moveTo(0, -halfH);
+    foundation.lineTo(halfW, 0);
+    foundation.lineTo(0, halfH);
+    foundation.lineTo(-halfW, 0);
+    foundation.closePath();
+    foundation.strokePath();
+    foundation.fillStyle(0x0284c7, 0.2);
+    foundation.fillPath();
+    foundation.setVisible(false);
+    container.add(foundation);
+    container.setData('foundation', foundation);
+
     const img = this.add.image(0, offsetY, textureKey);
+    img.setScale(scale);
     container.add(img);
 
     // Health / Construction Bar
@@ -283,6 +336,8 @@ export class WorldScene extends Phaser.Scene {
     container.setDepth(getIsoDepth(building.gridX + building.sizeX, building.gridY + building.sizeY, 15));
     container.setData('entityId', id);
     container.setData('entityType', 'building');
+    container.setData('buildingType', building.type);
+    container.setData('visualCenterY', offsetY);
 
     this.updateBuildingBar(container, building);
 
@@ -303,9 +358,15 @@ export class WorldScene extends Phaser.Scene {
     if (!hpBar) return;
 
     hpBar.clear();
-    const width = 48;
+    const width = Math.max(52, building.sizeX * 24);
     const height = 5;
-    const barY = -75;
+
+    let barY = -75;
+    if (building.type === 'TOWN_CENTER') barY = -185;
+    else if (building.type === 'TOWER') barY = -175;
+    else if (building.type === 'BARRACKS') barY = -135;
+    else if (building.type === 'HOUSE') barY = -95;
+    else if (building.type === 'FARM') barY = -52;
 
     // Background
     hpBar.fillStyle(0x0f172a, 0.85);
@@ -365,8 +426,9 @@ export class WorldScene extends Phaser.Scene {
     let unitDisplay: Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;
 
     if (hasVillagerSheet) {
-      // 64x64 frame anchored bottom, offset slightly upward so feet stand on isometric tile
-      const sprite = this.add.sprite(0, -22, 'unit_VILLAGER_sheet', 0);
+      // 64x64 frame anchored bottom, scaled to 0.72x for AoE realistic human-to-building proportions
+      const sprite = this.add.sprite(0, -20, 'unit_VILLAGER_sheet', 0);
+      sprite.setScale(0.72);
       if (this.anims.exists('villager_idle')) {
         sprite.play('villager_idle');
       }
@@ -374,15 +436,18 @@ export class WorldScene extends Phaser.Scene {
     } else {
       const textureKey = `unit_${unit.type}`;
       unitDisplay = this.add.image(0, -14, textureKey);
+      unitDisplay.setScale(0.75);
     }
 
     container.add(unitDisplay);
     container.setData('unitDisplay', unitDisplay);
 
-    // Selected indicator ring
+    // Selected indicator ring (AoE ground ellipse under feet)
     const selectRing = this.add.graphics();
-    selectRing.lineStyle(2, 0x38bdf8, 0.8);
-    selectRing.strokeEllipse(0, 0, 20, 8);
+    selectRing.lineStyle(1.5, 0x38bdf8, 0.9);
+    selectRing.strokeEllipse(0, 0, 16, 8);
+    selectRing.fillStyle(0x0284c7, 0.2);
+    selectRing.fillEllipse(0, 0, 16, 8);
     selectRing.setVisible(false);
     container.add(selectRing);
     container.setData('selectRing', selectRing);
@@ -598,23 +663,43 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    // Check click on buildings
+    // Check click on buildings (first check visual sprite bounds, then grid footprint)
     let clickedBuildingId: string | null = null;
     if (this.room) {
-      this.room.state.buildings.forEach((b: any, bId: string) => {
+      this.buildingSprites.forEach((container, bId) => {
+        const b = this.room?.state.buildings.get(bId);
+        if (!b) return;
+        const visualY = (container.getData('visualCenterY') as number) ?? -30;
+        const width = b.sizeX * 64;
+        const height = b.sizeY * 32 + 60;
         if (
-          clickGrid.gridX >= b.gridX &&
-          clickGrid.gridX < b.gridX + b.sizeX &&
-          clickGrid.gridY >= b.gridY &&
-          clickGrid.gridY < b.gridY + b.sizeY
+          Math.abs(worldPoint.x - container.x) <= width / 2 &&
+          worldPoint.y >= container.y + visualY - height / 2 &&
+          worldPoint.y <= container.y + 20
         ) {
           clickedBuildingId = bId;
         }
       });
+
+      if (!clickedBuildingId) {
+        this.room.state.buildings.forEach((b: any, bId: string) => {
+          if (
+            clickGrid.gridX >= b.gridX &&
+            clickGrid.gridX < b.gridX + b.sizeX &&
+            clickGrid.gridY >= b.gridY &&
+            clickGrid.gridY < b.gridY + b.sizeY
+          ) {
+            clickedBuildingId = bId;
+          }
+        });
+      }
     }
 
     if (clickedBuildingId) {
       this.selectedBuildingId = clickedBuildingId;
+      const bContainer = this.buildingSprites.get(clickedBuildingId);
+      const foundation = bContainer?.getData('foundation') as Phaser.GameObjects.Graphics;
+      foundation?.setVisible(true);
       this.notifySelectionChange();
       return;
     }
@@ -675,6 +760,13 @@ export class WorldScene extends Phaser.Scene {
       ring?.setVisible(false);
     });
     this.selectedUnitIds.clear();
+
+    if (this.selectedBuildingId) {
+      const bContainer = this.buildingSprites.get(this.selectedBuildingId);
+      const foundation = bContainer?.getData('foundation') as Phaser.GameObjects.Graphics;
+      foundation?.setVisible(false);
+    }
+
     this.selectedBuildingId = null;
     this.selectedResourceId = null;
   }
@@ -779,12 +871,42 @@ export class WorldScene extends Phaser.Scene {
     this.notifySelectionChange();
 
     let textureKey = 'b_town_center';
-    if (type === 'BARRACKS') textureKey = 'b_barracks';
-    else if (type === 'HOUSE') textureKey = 'b_house';
-    else if (type === 'FARM') textureKey = 'b_farm';
-    else if (type === 'TOWER') textureKey = 'b_tower';
+    let offsetY = -65;
+    let scale = 1.0;
+
+    const customKey = `building_${type}`;
+    if (this.textures.exists(customKey)) {
+      textureKey = customKey;
+      if (type === 'TOWN_CENTER') {
+        offsetY = -65;
+      } else if (type === 'BARRACKS') {
+        offsetY = -48;
+      } else if (type === 'HOUSE') {
+        offsetY = -35;
+      } else if (type === 'FARM') {
+        offsetY = 0;
+      } else if (type === 'TOWER') {
+        offsetY = -80;
+      }
+    } else {
+      if (type === 'BARRACKS') {
+        textureKey = 'b_barracks';
+        offsetY = -35;
+      } else if (type === 'HOUSE') {
+        textureKey = 'b_house';
+        offsetY = -25;
+      } else if (type === 'FARM') {
+        textureKey = 'b_farm';
+        offsetY = 0;
+      } else if (type === 'TOWER') {
+        textureKey = 'b_tower';
+        offsetY = -45;
+      }
+    }
 
     this.placementGhostImage.setTexture(textureKey);
+    this.placementGhostImage.setY(offsetY);
+    this.placementGhostImage.setScale(scale);
   }
 
   public cancelBuildingPlacement() {
@@ -870,7 +992,79 @@ export class WorldScene extends Phaser.Scene {
     this.onSelectionChange(null);
   }
 
+  private updateViewportTerrain() {
+    const cam = this.cameras.main;
+    const view = cam.worldView;
+
+    // Only recalculate when camera has moved more than 16px or zoom changed
+    if (
+      Math.abs(view.x - this.lastViewportX) < 16 &&
+      Math.abs(view.y - this.lastViewportY) < 16 &&
+      Math.abs(cam.zoom - this.lastViewportZoom) < 0.01
+    ) {
+      return;
+    }
+
+    this.lastViewportX = view.x;
+    this.lastViewportY = view.y;
+    this.lastViewportZoom = cam.zoom;
+
+    // Expand margin to prevent edge pop-in during fast scrolling
+    const margin = 96;
+    const left = view.left - margin;
+    const right = view.right + margin;
+    const top = view.top - margin;
+    const bottom = view.bottom + margin;
+
+    const cTopLeft = screenToGrid(left, top);
+    const cTopRight = screenToGrid(right, top);
+    const cBottomLeft = screenToGrid(left, bottom);
+    const cBottomRight = screenToGrid(right, bottom);
+
+    const minGx = Math.max(0, Math.min(cTopLeft.gridX, cTopRight.gridX, cBottomLeft.gridX, cBottomRight.gridX) - 2);
+    const maxGx = Math.min(MAP_GRID_WIDTH - 1, Math.max(cTopLeft.gridX, cTopRight.gridX, cBottomLeft.gridX, cBottomRight.gridX) + 2);
+    const minGy = Math.max(0, Math.min(cTopLeft.gridY, cTopRight.gridY, cBottomLeft.gridY, cBottomRight.gridY) - 2);
+    const maxGy = Math.min(MAP_GRID_HEIGHT - 1, Math.max(cTopLeft.gridY, cTopRight.gridY, cBottomLeft.gridY, cBottomRight.gridY) + 2);
+
+    let poolIdx = 0;
+    const poolLen = this.tilePool.length;
+
+    for (let gy = minGy; gy <= maxGy; gy++) {
+      for (let gx = minGx; gx <= maxGx; gx++) {
+        const screenPos = gridToScreen(gx, gy);
+
+        if (
+          screenPos.x >= left &&
+          screenPos.x <= right &&
+          screenPos.y >= top &&
+          screenPos.y <= bottom
+        ) {
+          if (poolIdx < poolLen) {
+            const tile = this.tilePool[poolIdx++];
+            tile.setPosition(screenPos.x, screenPos.y);
+            tile.setVisible(true);
+
+            // Subtle organic terrain shading
+            const shade = (gx * 17 + gy * 31) % 5;
+            if (shade === 0) tile.setTint(0xedf8eb);
+            else if (shade === 1) tile.setTint(0xf7fdf5);
+            else if (shade === 2) tile.setTint(0xe2f0df);
+            else if (shade === 3) tile.setTint(0xd9ecd6);
+            else tile.clearTint();
+          }
+        }
+      }
+    }
+
+    // Hide remaining unused tiles
+    while (poolIdx < poolLen) {
+      this.tilePool[poolIdx++].setVisible(false);
+    }
+  }
+
   update(time: number, delta: number) {
+    this.updateViewportTerrain();
+
     const dtSeconds = delta / 1000;
     const cameraSpeed = (600 / this.cameras.main.zoom) * dtSeconds;
 

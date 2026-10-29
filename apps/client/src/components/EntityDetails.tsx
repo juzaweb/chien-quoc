@@ -43,6 +43,15 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
               alt="Villager"
               className="w-5 h-5 object-contain rounded bg-slate-900/80 border border-amber-500/50"
             />
+          ) : entity.type === 'building' && entity.subType ? (
+            <img
+              src={`/assets/buildings/${entity.subType.toLowerCase()}.png`}
+              alt={entity.name}
+              className="w-5 h-5 object-contain rounded bg-slate-900/80 border border-amber-500/50"
+              onError={(e) => {
+                (e.target as HTMLElement).style.display = 'none';
+              }}
+            />
           ) : (
             <div className="w-2.5 h-2.5 rounded-sm bg-amber-500" />
           )}

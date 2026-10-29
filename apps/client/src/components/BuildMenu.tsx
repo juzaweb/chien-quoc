@@ -17,6 +17,14 @@ const BUILDINGS: { type: BuildingType; icon: React.ReactNode; hotkey: string }[]
   { type: 'TOWER', icon: <TowerControl size={20} />, hotkey: 'T' }
 ];
 
+const BUILDING_THUMBNAILS: Record<BuildingType, string> = {
+  TOWN_CENTER: '/assets/buildings/town_center.png',
+  BARRACKS: '/assets/buildings/barracks.png',
+  HOUSE: '/assets/buildings/house.png',
+  FARM: '/assets/buildings/farm.png',
+  TOWER: '/assets/buildings/tower.png'
+};
+
 export const BuildMenu: React.FC<BuildMenuProps> = ({
   playerResources,
   activeBuildingType,
@@ -58,17 +66,29 @@ export const BuildMenu: React.FC<BuildMenuProps> = ({
                   else onSelectBuilding(type);
                 }}
                 disabled={!canAfford}
-                className={`relative flex flex-col items-center justify-center w-14 h-14 rounded border transition-all ${
+                className={`relative flex flex-col items-center justify-between p-1 w-16 h-16 rounded-md border transition-all ${
                   isSelected
-                    ? 'bg-amber-600/40 border-amber-400 ring-2 ring-amber-400/50 shadow-lg'
+                    ? 'bg-amber-600/40 border-amber-400 ring-2 ring-amber-400/60 shadow-lg'
                     : canAfford
-                    ? 'aoe-button text-slate-200 hover:border-amber-500'
-                    : 'bg-slate-900/60 border-slate-800 text-slate-600 cursor-not-allowed opacity-60'
+                    ? 'aoe-button text-slate-200 hover:border-amber-400'
+                    : 'bg-slate-900/60 border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
                 }`}
               >
-                {icon}
-                <span className="text-[10px] font-semibold mt-1 truncate max-w-[50px]">{bp.name}</span>
-                <span className="absolute top-0.5 right-1 text-[9px] text-amber-500 font-mono">{hotkey}</span>
+                <div className="w-10 h-10 flex items-center justify-center relative mt-0.5">
+                  <img
+                    src={BUILDING_THUMBNAILS[type]}
+                    alt={bp.name}
+                    className="w-full h-full object-contain filter drop-shadow group-hover:scale-105 transition-transform"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center -z-10 opacity-40">
+                    {icon}
+                  </div>
+                </div>
+                <span className="text-[10px] font-semibold truncate max-w-[56px] text-slate-300 leading-none mb-0.5">{bp.name}</span>
+                <span className="absolute top-0.5 right-1 text-[9px] text-amber-400 font-mono font-bold bg-black/60 px-1 rounded">{hotkey}</span>
               </button>
 
               {/* Tooltip */}

@@ -44,6 +44,14 @@ export class DatabaseService {
   }
 
   /**
+   * Clears all saved resource nodes (e.g. when regenerating for a larger map).
+   */
+  public static async clearAllResources() {
+    await this.initialize();
+    await prisma.worldResourceNode.deleteMany({});
+  }
+
+  /**
    * Persists all initial or updated resource nodes.
    */
   public static async saveAllResources(nodes: ResourceNodeState[]) {

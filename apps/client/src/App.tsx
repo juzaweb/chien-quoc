@@ -190,7 +190,7 @@ export const App: React.FC = () => {
       {isJoined && (
         <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between pointer-events-none select-none z-20 gap-3">
           {/* Left: Minimap */}
-          <Minimap room={room} onPanToGrid={handlePanToGrid} />
+          <Minimap room={room} sceneRef={sceneRef} onPanToGrid={handlePanToGrid} />
 
           {/* Center: Selected Entity Info & Unit Training */}
           <EntityDetails
