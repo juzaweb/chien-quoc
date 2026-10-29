@@ -11,7 +11,8 @@ import {
   TILE_WIDTH,
   gridToScreen,
   screenToGrid,
-  getIsoDepth
+  getIsoDepth,
+  isDirtRoadTile
 } from '@chien-quoc/shared';
 import { generateProceduralTextures } from '../renderers/ProceduralSprites.js';
 
@@ -124,6 +125,12 @@ export class WorldScene extends Phaser.Scene {
     this.load.image('tile_grass_2', `/assets/terrain/grass_2.png?${tv}`);
     this.load.image('tile_grass_3', `/assets/terrain/grass_3.png?${tv}`);
     this.load.image('tile_grass', `/assets/terrain/grass.png?${tv}`);
+
+    // Preload Age of Empires 2 Dirt Road Terrain textures
+    this.load.image('tile_dirt_1', `/assets/terrain/dirt_1.png?${tv}`);
+    this.load.image('tile_dirt_2', `/assets/terrain/dirt_2.png?${tv}`);
+    this.load.image('tile_dirt_3', `/assets/terrain/dirt_3.png?${tv}`);
+    this.load.image('tile_dirt', `/assets/terrain/dirt.png?${tv}`);
   }
 
   create() {
@@ -1140,9 +1147,11 @@ export class WorldScene extends Phaser.Scene {
           }
           poolIdx++;
 
-          // Natural grass texture variation (AoE 2 meadow style)
+          // Natural AoE 2 terrain selection: Dirt Road vs Lush Meadow Grass
+          const isRoad = isDirtRoadTile(gx, gy);
           const variant = ((gx * 7 + gy * 13) % 3) + 1;
-          const texKey = this.textures.exists(`tile_grass_${variant}`) ? `tile_grass_${variant}` : 'tile_grass';
+          const prefix = isRoad ? 'tile_dirt' : 'tile_grass';
+          const texKey = this.textures.exists(`${prefix}_${variant}`) ? `${prefix}_${variant}` : prefix;
           if (tile.texture.key !== texKey) {
             tile.setTexture(texKey);
           }

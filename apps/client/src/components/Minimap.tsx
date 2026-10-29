@@ -44,7 +44,52 @@ export const Minimap: React.FC<MinimapProps> = ({ room, sceneRef, onPanToGrid })
         const scaleX = canvas.width / MAP_GRID_WIDTH;
         const scaleY = canvas.height / MAP_GRID_HEIGHT;
 
-        // 1. Draw Resource Nodes
+        // 1. Draw AoE Dirt Road Network on Minimap
+        ctx.strokeStyle = '#c3946a';
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+
+        // East-West Grand Highway
+        ctx.beginPath();
+        for (let gx = 0; gx < MAP_GRID_WIDTH; gx += 2) {
+          const gy = 110 + 22 * Math.sin(gx * 0.045) + 9 * Math.cos(gx * 0.09) + 4 * Math.sin(gx * 0.16);
+          if (gx === 0) ctx.moveTo(gx * scaleX, gy * scaleY);
+          else ctx.lineTo(gx * scaleX, gy * scaleY);
+        }
+        ctx.stroke();
+
+        // North-South Royal Silk Axis
+        ctx.beginPath();
+        for (let gy = 0; gy < MAP_GRID_HEIGHT; gy += 2) {
+          const gx = 110 + 22 * Math.sin(gy * 0.045) + 9 * Math.cos(gy * 0.09) + 4 * Math.sin(gy * 0.16);
+          if (gy === 0) ctx.moveTo(gx * scaleX, gy * scaleY);
+          else ctx.lineTo(gx * scaleX, gy * scaleY);
+        }
+        ctx.stroke();
+
+        // Diagonal Northwest - Southeast
+        ctx.beginPath();
+        for (let s = 10; s < 210; s += 2) {
+          const meander = 12 * Math.sin(s * 0.07);
+          const gx = s + meander / 2;
+          const gy = s - meander / 2;
+          if (s === 10) ctx.moveTo(gx * scaleX, gy * scaleY);
+          else ctx.lineTo(gx * scaleX, gy * scaleY);
+        }
+        ctx.stroke();
+
+        // Diagonal Northeast - Southwest
+        ctx.beginPath();
+        for (let s = 10; s < 210; s += 2) {
+          const meander = 12 * Math.sin((s - (220 - s)) * 0.035);
+          const gx = s;
+          const gy = 220 - s + meander;
+          if (s === 10) ctx.moveTo(gx * scaleX, gy * scaleY);
+          else ctx.lineTo(gx * scaleX, gy * scaleY);
+        }
+        ctx.stroke();
+
+        // 2. Draw Resource Nodes
         room.state.resourceNodes?.forEach((res: any) => {
           if (res.type === 'TREE') {
             ctx.fillStyle = '#166534';
