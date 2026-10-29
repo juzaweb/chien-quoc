@@ -73,11 +73,21 @@ export class WorldScene extends Phaser.Scene {
 
   preload() {
     generateProceduralTextures(this);
+
+    // Preload generated assets with fallback support
+    this.load.spritesheet('unit_VILLAGER_sheet', '/assets/units/villager_sheet.png', {
+      frameWidth: 64,
+      frameHeight: 64
+    });
+    this.load.image('unit_VILLAGER_idle', '/assets/units/villager_idle.png');
   }
 
   create() {
     // Disable right click context menu in browser
     this.input.mouse?.disableContextMenu();
+
+    // Register unit animations if spritesheets are loaded
+    this.initUnitAnimations();
 
     // 1. Render Isometric Terrain
     this.terrainGroup = this.add.group();
@@ -318,13 +328,56 @@ export class WorldScene extends Phaser.Scene {
     hpBar.strokeRect(-width / 2, barY, width, height);
   }
 
+  private initUnitAnimations() {
+    if (this.textures.exists('unit_VILLAGER_sheet')) {
+      if (!this.anims.exists('villager_idle')) {
+        this.anims.create({
+          key: 'villager_idle',
+          frames: this.anims.generateFrameNumbers('unit_VILLAGER_sheet', { start: 0, end: 0 }),
+          frameRate: 1,
+          repeat: -1
+        });
+      }
+      if (!this.anims.exists('villager_walk')) {
+        this.anims.create({
+          key: 'villager_walk',
+          frames: this.anims.generateFrameNumbers('unit_VILLAGER_sheet', { start: 1, end: 4 }),
+          frameRate: 8,
+          repeat: -1
+        });
+      }
+      if (!this.anims.exists('villager_harvest')) {
+        this.anims.create({
+          key: 'villager_harvest',
+          frames: this.anims.generateFrameNumbers('unit_VILLAGER_sheet', { start: 5, end: 6 }),
+          frameRate: 4,
+          repeat: -1
+        });
+      }
+    }
+  }
+
   private createUnitSprite(id: string, unit: any, cb?: any) {
     const screenPos = gridToScreen(unit.x, unit.y);
     const container = this.add.container(screenPos.x, screenPos.y);
 
-    const textureKey = `unit_${unit.type}`;
-    const img = this.add.image(0, -14, textureKey);
-    container.add(img);
+    const hasVillagerSheet = unit.type === 'VILLAGER' && this.textures.exists('unit_VILLAGER_sheet');
+    let unitDisplay: Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;
+
+    if (hasVillagerSheet) {
+      // 64x64 frame anchored bottom, offset slightly upward so feet stand on isometric tile
+      const sprite = this.add.sprite(0, -22, 'unit_VILLAGER_sheet', 0);
+      if (this.anims.exists('villager_idle')) {
+        sprite.play('villager_idle');
+      }
+      unitDisplay = sprite;
+    } else {
+      const textureKey = `unit_${unit.type}`;
+      unitDisplay = this.add.image(0, -14, textureKey);
+    }
+
+    container.add(unitDisplay);
+    container.setData('unitDisplay', unitDisplay);
 
     // Selected indicator ring
     const selectRing = this.add.graphics();
@@ -346,10 +399,31 @@ export class WorldScene extends Phaser.Scene {
     this.unitSprites.set(id, container);
     this.unitTargetPositions.set(id, { x: unit.x, y: unit.y, hp: unit.hp, maxHp: unit.maxHp });
 
+    const updateVisualState = (actionState: string) => {
+      if (hasVillagerSheet && unitDisplay instanceof Phaser.GameObjects.Sprite) {
+        if (actionState === 'MOVING') {
+          if (unitDisplay.anims.currentAnim?.key !== 'villager_walk') {
+            unitDisplay.play('villager_walk');
+          }
+        } else if (actionState === 'HARVESTING') {
+          if (unitDisplay.anims.currentAnim?.key !== 'villager_harvest') {
+            unitDisplay.play('villager_harvest');
+          }
+        } else {
+          if (unitDisplay.anims.currentAnim?.key !== 'villager_idle') {
+            unitDisplay.play('villager_idle');
+          }
+        }
+      }
+    };
+
+    updateVisualState(unit.actionState);
+
     if (cb) {
       cb.onChange(unit, () => {
         this.unitTargetPositions.set(id, { x: unit.x, y: unit.y, hp: unit.hp, maxHp: unit.maxHp });
         this.updateUnitBar(container, unit.hp, unit.maxHp);
+        updateVisualState(unit.actionState);
       });
     }
   }
@@ -361,7 +435,7 @@ export class WorldScene extends Phaser.Scene {
     hpBar.clear();
     const width = 24;
     const height = 3;
-    const barY = -30;
+    const barY = -34;
 
     hpBar.fillStyle(0x0f172a, 0.8);
     hpBar.fillRect(-width / 2, barY, width, height);
@@ -503,11 +577,12 @@ export class WorldScene extends Phaser.Scene {
 
     this.clearSelection();
 
-    // Check click on units first
+    // Check click on units first (check distance to unit visual center)
     let clickedUnitId: string | null = null;
     this.unitSprites.forEach((container, unitId) => {
-      const dist = Math.hypot(container.x - worldPoint.x, container.y - worldPoint.y);
-      if (dist < 25) {
+      // Unit visual center is offset vertically around y - 18
+      const dist = Math.hypot(container.x - worldPoint.x, (container.y - 18) - worldPoint.y);
+      if (dist < 32) {
         clickedUnitId = unitId;
       }
     });
@@ -575,7 +650,14 @@ export class WorldScene extends Phaser.Scene {
     this.unitSprites.forEach((container, unitId) => {
       const unit = this.room?.state.units.get(unitId);
       if (unit && unit.ownerId === this.mySessionId) {
-        if (container.x >= minX && container.x <= maxX && container.y >= minY && container.y <= maxY) {
+        // Check overlap against unit's visual bounding box
+        const unitLeft = container.x - 24;
+        const unitRight = container.x + 24;
+        const unitTop = container.y - 50;
+        const unitBottom = container.y + 10;
+
+        const overlaps = unitRight >= minX && unitLeft <= maxX && unitBottom >= minY && unitTop <= maxY;
+        if (overlaps) {
           this.selectedUnitIds.add(unitId);
           const ring = container.getData('selectRing') as Phaser.GameObjects.Graphics;
           ring?.setVisible(true);
@@ -811,9 +893,41 @@ export class WorldScene extends Phaser.Scene {
       const container = this.unitSprites.get(unitId);
       if (container) {
         const targetScreen = gridToScreen(target.x, target.y);
+        const prevX = container.x;
+        const prevY = container.y;
         container.x = Phaser.Math.Linear(container.x, targetScreen.x, 0.25);
         container.y = Phaser.Math.Linear(container.y, targetScreen.y, 0.25);
         container.setDepth(getIsoDepth(target.x, target.y, 25));
+
+        // Flip facing direction based on movement
+        const dx = targetScreen.x - prevX;
+        const moveDist = Math.hypot(container.x - prevX, container.y - prevY);
+        const unitDisplay = container.getData('unitDisplay') as Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;
+        if (unitDisplay) {
+          if (Math.abs(dx) > 0.05) {
+            unitDisplay.setFlipX(dx < 0);
+          }
+
+          // Trigger walk animation in real-time whenever unit is moving
+          if (unitDisplay instanceof Phaser.GameObjects.Sprite && this.anims.exists('villager_walk')) {
+            const unit = this.room?.state.units.get(unitId);
+            const isHarvesting = unit?.actionState === 'HARVESTING';
+
+            if (moveDist > 0.15) {
+              if (unitDisplay.anims.currentAnim?.key !== 'villager_walk') {
+                unitDisplay.play('villager_walk');
+              }
+            } else if (isHarvesting) {
+              if (unitDisplay.anims.currentAnim?.key !== 'villager_harvest') {
+                unitDisplay.play('villager_harvest');
+              }
+            } else {
+              if (unitDisplay.anims.currentAnim?.key !== 'villager_idle') {
+                unitDisplay.play('villager_idle');
+              }
+            }
+          }
+        }
       }
     });
   }

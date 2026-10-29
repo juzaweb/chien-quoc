@@ -204,17 +204,27 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         this.state.players.set(client.sessionId, player);
 
         // Re-assign ownership of their structures and troops to active sessionId
+        let ownedBCount = 0;
         this.state.buildings.forEach((b: BuildingState) => {
           if (b.ownerId === playerName || b.ownerId === savedProfile.id) {
             b.ownerId = client.sessionId;
+            ownedBCount++;
           }
         });
 
+        let ownedUCount = 0;
         this.state.units.forEach((u: UnitState) => {
           if (u.ownerId === playerName || u.ownerId === savedProfile.id) {
             u.ownerId = client.sessionId;
+            ownedUCount++;
           }
         });
+
+        // If returning empire has no structures or units left, spawn starter base
+        if (ownedBCount === 0 && ownedUCount === 0) {
+          console.log(`[WorldRoom] Player ${playerName} has no remaining units/buildings. Spawning starter base.`);
+          this.spawnInitialBase(client.sessionId);
+        }
 
         this.updatePlayerPopulation(client.sessionId);
         console.log(`🏰 [WorldRoom] Welcome back Emperor ${playerName}! Empire restored from SQLite.`);
@@ -712,6 +722,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       });
 
       await DatabaseService.savePlayerEmpire(player, ownedB, ownedU);
+      this.state.players.delete(client.sessionId);
     }
   }
 

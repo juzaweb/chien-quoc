@@ -21,7 +21,9 @@ import { Shield, Sparkles, Swords, AlertCircle } from 'lucide-react';
 export const App: React.FC = () => {
   const [room, setRoom] = useState<Room | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
-  const [playerName, setPlayerName] = useState<string>('');
+  const [playerName, setPlayerName] = useState<string>(() => {
+    return localStorage.getItem('cq_player_name') || '';
+  });
   const [isJoined, setIsJoined] = useState<boolean>(false);
 
   // Player state
@@ -55,8 +57,11 @@ export const App: React.FC = () => {
       const serverUrl = `${httpProtocol}//${serverHost}:2567`;
 
       const client = new Client(serverUrl);
+      const effectiveName = nameToUse || `Lord_${Math.floor(Math.random() * 900 + 100)}`;
+      localStorage.setItem('cq_player_name', effectiveName);
+
       const joinedRoom = await client.joinOrCreate('world_room', {
-        playerName: nameToUse || `Lord_${Math.floor(Math.random() * 900 + 100)}`
+        playerName: effectiveName
       });
 
       setRoom(joinedRoom);

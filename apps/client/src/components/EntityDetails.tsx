@@ -37,7 +37,15 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
       {/* Header Info */}
       <div className="flex items-center justify-between border-b border-amber-800/40 pb-1.5">
         <div className="flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-sm bg-amber-500" />
+          {entity.subType === 'VILLAGER' ? (
+            <img
+              src="/assets/units/villager_idle.png"
+              alt="Villager"
+              className="w-5 h-5 object-contain rounded bg-slate-900/80 border border-amber-500/50"
+            />
+          ) : (
+            <div className="w-2.5 h-2.5 rounded-sm bg-amber-500" />
+          )}
           <span className="font-medieval text-xs font-bold text-amber-300 truncate max-w-[170px]">
             {entity.name}
           </span>
@@ -116,12 +124,15 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
                   <button
                     onClick={() => onTrainUnit(entity.id, uType)}
                     disabled={!canAfford}
-                    className={`px-2.5 py-1.5 rounded border text-[11px] font-semibold transition-all flex flex-col items-center ${
+                    className={`px-2.5 py-1.5 rounded border text-[11px] font-semibold transition-all flex flex-col items-center gap-1 ${
                       canAfford
                         ? 'aoe-button text-slate-200 hover:border-amber-400'
                         : 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
                     }`}
                   >
+                    {uType === 'VILLAGER' && (
+                      <img src="/assets/units/villager_idle.png" alt="Villager" className="w-6 h-6 object-contain" />
+                    )}
                     <span>{uBp.name}</span>
                   </button>
 
