@@ -6,6 +6,7 @@ import {
   BuildingType,
   MAP_GRID_HEIGHT,
   MAP_GRID_WIDTH,
+  MAX_SELECTION,
   NetworkMessage,
   TILE_HEIGHT,
   TILE_WIDTH,
@@ -46,6 +47,12 @@ const CONTROL_GROUP_KEYS = ['ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN
 
 /** Second press within this window re-centres the camera on the group. */
 const CONTROL_GROUP_RECALL_DOUBLE_MS = 300;
+
+/**
+ * CTL-02: a second click on the same unit within this window selects every
+ * unit of that type currently visible, like AoE2's double-click.
+ */
+const DOUBLE_CLICK_SAME_TYPE_MS = 350;
 
 export interface SelectedEntityData {
   id: string;
@@ -107,6 +114,14 @@ export class WorldScene extends Phaser.Scene {
   private isDragSelecting: boolean = false;
   private dragStartScreen: { x: number; y: number } = { x: 0, y: 0 };
   private dragSelectionGraphics!: Phaser.GameObjects.Graphics;
+
+  // CTL-02: modifiers are captured on pointerdown because pointerup can report
+  // them differently (the browser fires `contextmenu` early for ctrl-click).
+  private pendingSelectionMods: { additive: boolean; selectSameType: boolean } = {
+    additive: false,
+    selectSameType: false
+  };
+  private lastUnitClick: { unitId: string; at: number } = { unitId: '', at: 0 };
 
   // React Callbacks
   public onSelectionChange: ((entity: SelectedEntityData | null) => void) | null = null;
@@ -234,6 +249,10 @@ export class WorldScene extends Phaser.Scene {
       // hotkeys in App.tsx. Panning is arrows + edge scroll (see update()).
       this.bindControlGroupKeys(this.input.keyboard);
     }
+
+    // Ctrl+left-click is the same-type selection shortcut (CTL-02). On macOS the
+    // OS turns that gesture into a context menu unless we suppress it here.
+    this.input.mouse?.disableContextMenu();
 
     // Initial camera position centered on map - normal 1.0 zoom
     const center = gridToScreen(MAP_GRID_WIDTH / 2, MAP_GRID_HEIGHT / 2);
@@ -824,7 +843,14 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private handlePointerDown(pointer: Phaser.Input.Pointer) {
-    if (pointer.rightButtonDown()) {
+    const native = pointer.event as MouseEvent | undefined;
+    // macOS: Phaser rewrites Ctrl+left-click into a right-click to match the OS
+    // convention (see Pointer#down). Ctrl+click is our same-type-selection
+    // modifier and the canvas context menu is disabled, so read the native
+    // button instead of trusting `rightButtonDown()`.
+    const ctrlLeftClick = !!native && native.button === 0 && native.ctrlKey;
+
+    if (pointer.rightButtonDown() && !ctrlLeftClick) {
       // Right Click
       if (this.buildingToPlace) {
         this.cancelBuildingPlacement();
@@ -834,11 +860,15 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    if (pointer.leftButtonDown()) {
+    if (pointer.leftButtonDown() || ctrlLeftClick) {
       if (this.buildingToPlace) {
         this.commitBuildingPlacement(pointer);
       } else {
         // Start Drag selection box
+        this.pendingSelectionMods = {
+          additive: !!native?.shiftKey,
+          selectSameType: !!native?.ctrlKey || !!native?.metaKey
+        };
         this.isDragSelecting = true;
         this.dragStartScreen = { x: pointer.x, y: pointer.y };
       }
@@ -857,13 +887,15 @@ export class WorldScene extends Phaser.Scene {
       const screenDistance = Math.hypot(pointer.x - this.dragStartScreen.x, pointer.y - this.dragStartScreen.y);
       const dragDistanceWorld = screenDistance / zoom;
       const threshold = Math.max(CLICK_DRAG_THRESHOLD_WORLD_PX, CLICK_DRAG_MIN_SCREEN_PX / zoom);
+      const mods = this.pendingSelectionMods;
+      this.pendingSelectionMods = { additive: false, selectSameType: false };
 
       if (dragDistanceWorld > threshold) {
         // Box Selection
-        this.performBoxSelection(this.dragStartScreen, { x: pointer.x, y: pointer.y });
+        this.performBoxSelection(this.dragStartScreen, { x: pointer.x, y: pointer.y }, mods.additive);
       } else {
         // Single Click Selection
-        this.performSingleClickSelection(pointer);
+        this.performSingleClickSelection(pointer, mods.additive, mods.selectSameType);
       }
     }
   }
@@ -888,11 +920,9 @@ export class WorldScene extends Phaser.Scene {
     return nx * nx + ny * ny <= 1;
   }
 
-  private performSingleClickSelection(pointer: Phaser.Input.Pointer) {
+  private performSingleClickSelection(pointer: Phaser.Input.Pointer, additive = false, selectSameType = false) {
     const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
     const clickGrid = screenToGrid(worldPoint.x, worldPoint.y);
-
-    this.clearSelection();
 
     // Check click on units first (shared hit-test, topmost depth wins)
     let clickedUnitId: string | null = null;
@@ -905,15 +935,40 @@ export class WorldScene extends Phaser.Scene {
     });
 
     if (clickedUnitId) {
-      this.selectedUnitIds.add(clickedUnitId);
-      const container = this.unitSprites.get(clickedUnitId);
-      if (container) {
-        const ring = container.getData('selectRing') as Phaser.GameObjects.Graphics;
-        ring?.setVisible(true);
+      const unit = this.room?.state.units.get(clickedUnitId);
+      const isOwn = !!unit && unit.ownerId === this.mySessionId;
+
+      // Double-click is detected per unit so a double-click on ground or on a
+      // building does not leave a stale timestamp behind.
+      const now = this.time.now;
+      const isDoubleClick =
+        this.lastUnitClick.unitId === clickedUnitId && now - this.lastUnitClick.at <= DOUBLE_CLICK_SAME_TYPE_MS;
+      this.lastUnitClick = { unitId: clickedUnitId, at: now };
+
+      // Same-type selection only makes sense for units we own and can order.
+      if (isOwn && unit && (selectSameType || isDoubleClick)) {
+        this.selectUnitsOfTypeInViewport(unit.type, additive);
+        return;
       }
+
+      if (additive) {
+        this.toggleUnitSelection(clickedUnitId);
+        return;
+      }
+
+      this.clearSelection();
+      this.addUnitToSelection(clickedUnitId);
       this.notifySelectionChange();
       return;
     }
+
+    this.lastUnitClick = { unitId: '', at: 0 };
+
+    // Shift-clicking anything that is not a unit keeps the current selection,
+    // so a stray shift-click on terrain does not wipe the army being gathered.
+    if (additive) return;
+
+    this.clearSelection();
 
     // Check click on buildings (first check visual sprite bounds, then grid footprint)
     let clickedBuildingId: string | null = null;
@@ -981,7 +1036,11 @@ export class WorldScene extends Phaser.Scene {
     this.notifySelectionChange();
   }
 
-  private performBoxSelection(p1Screen: { x: number; y: number }, p2Screen: { x: number; y: number }) {
+  private performBoxSelection(
+    p1Screen: { x: number; y: number },
+    p2Screen: { x: number; y: number },
+    additive = false
+  ) {
     const p1World = this.cameras.main.getWorldPoint(p1Screen.x, p1Screen.y);
     const p2World = this.cameras.main.getWorldPoint(p2Screen.x, p2Screen.y);
 
@@ -990,11 +1049,16 @@ export class WorldScene extends Phaser.Scene {
     const minY = Math.min(p1World.y, p2World.y);
     const maxY = Math.max(p1World.y, p2World.y);
 
-    this.clearSelection();
+    // Shift-drag adds to the current selection instead of replacing it.
+    if (!additive) this.clearSelection();
+
+    let selectedCount = this.selectedUnitIds.size;
+    let added = 0;
 
     this.unitSprites.forEach((container, unitId) => {
+      if (selectedCount >= MAX_SELECTION) return;
       const unit = this.room?.state.units.get(unitId);
-      if (unit && unit.ownerId === this.mySessionId) {
+      if (unit && unit.ownerId === this.mySessionId && !this.selectedUnitIds.has(unitId)) {
         // Same body box as hitTestUnit, as an AABB so partial overlap still counts.
         const { centerY, radiusX, radiusY } = this.getUnitBodyBox(container);
         const unitLeft = container.x - radiusX;
@@ -1007,10 +1071,78 @@ export class WorldScene extends Phaser.Scene {
           this.selectedUnitIds.add(unitId);
           const ring = container.getData('selectRing') as Phaser.GameObjects.Graphics;
           ring?.setVisible(true);
+          selectedCount++;
+          added++;
         }
       }
     });
 
+    // A mixed selection (building + units) has no meaning for commands, so
+    // collecting units cancels the single-entity selection.
+    if (added > 0) this.clearBuildingAndResourceSelection();
+
+    this.notifySelectionChange();
+  }
+
+  /** Rings one unit on. Max-selection overflow is the caller's problem. */
+  private addUnitToSelection(unitId: string) {
+    const container = this.unitSprites.get(unitId);
+    this.selectedUnitIds.add(unitId);
+    const ring = container?.getData('selectRing') as Phaser.GameObjects.Graphics | undefined;
+    ring?.setVisible(true);
+  }
+
+  /** Shift-click a unit: first click adds, second click removes it again. */
+  private toggleUnitSelection(unitId: string) {
+    const container = this.unitSprites.get(unitId);
+
+    if (this.selectedUnitIds.has(unitId)) {
+      this.selectedUnitIds.delete(unitId);
+      const ring = container?.getData('selectRing') as Phaser.GameObjects.Graphics;
+      ring?.setVisible(false);
+      this.notifySelectionChange();
+      return;
+    }
+
+    if (this.selectedUnitIds.size >= MAX_SELECTION) return;
+
+    this.addUnitToSelection(unitId);
+    this.clearBuildingAndResourceSelection();
+    this.notifySelectionChange();
+  }
+
+  /**
+   * Ctrl-click / double-click: select every own unit of `type` that is visible
+   * in the current viewport (AoE2 only takes what is on screen).
+   */
+  private selectUnitsOfTypeInViewport(type: string, additive = false) {
+    const view = this.cameras.main.worldView;
+
+    if (!additive) this.clearSelection();
+
+    let selectedCount = this.selectedUnitIds.size;
+    let added = 0;
+
+    this.unitSprites.forEach((container, unitId) => {
+      if (selectedCount >= MAX_SELECTION) return;
+      const unit = this.room?.state.units.get(unitId);
+      if (!unit || unit.ownerId !== this.mySessionId || unit.type !== type) return;
+      if (this.selectedUnitIds.has(unitId)) return;
+
+      const { centerY, radiusX, radiusY } = this.getUnitBodyBox(container);
+      const visible =
+        container.x + radiusX >= view.x &&
+        container.x - radiusX <= view.right &&
+        centerY + radiusY >= view.y &&
+        centerY - radiusY <= view.bottom;
+      if (!visible) return;
+
+      this.addUnitToSelection(unitId);
+      selectedCount++;
+      added++;
+    });
+
+    if (added > 0) this.clearBuildingAndResourceSelection();
     this.notifySelectionChange();
   }
 
@@ -1022,6 +1154,11 @@ export class WorldScene extends Phaser.Scene {
     });
     this.selectedUnitIds.clear();
 
+    this.clearBuildingAndResourceSelection();
+  }
+
+  /** Units and buildings never mix in a selection, so this is also called alone. */
+  private clearBuildingAndResourceSelection() {
     if (this.selectedBuildingId) {
       const bContainer = this.buildingSprites.get(this.selectedBuildingId);
       const foundation = bContainer?.getData('foundation') as Phaser.GameObjects.Graphics;

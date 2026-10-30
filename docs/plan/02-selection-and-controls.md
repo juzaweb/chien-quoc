@@ -51,6 +51,33 @@
 
 **File:** `apps/client/src/game/scenes/WorldScene.ts` (`handlePointerDown`, `handlePointerUp`, `perform*Selection`)
 
+> **DONE.**
+> - Modifier được chụp tại **pointerdown** (`pendingSelectionMods`), vì pointerup có thể
+>   mất `shiftKey`/`ctrlKey`; `handlePointerUp` chỉ đọc lại giá trị đã chụp rồi reset.
+> - `performSingleClickSelection(pointer, additive, selectSameType)`:
+>   `Shift` → `toggleUnitSelection` (thêm/bớt); `Ctrl`/`Cmd` hoặc double-click cùng unit
+>   trong 350ms → `selectUnitsOfTypeInViewport(type)`; click thường → như cũ.
+> - `performBoxSelection(..., additive)`: `Shift` giữ selection cũ và chỉ **thêm**.
+> - `selectUnitsOfTypeInViewport` lọc theo `cameras.main.worldView` (chỉ unit đang thấy),
+>   đúng AoE2; dùng chung `getUnitBodyBox()` nên khớp hit-test với click và box.
+> - `MAX_SELECTION` chặn ở cả box, same-type và shift-click; chọn quân thì
+>   `clearBuildingAndResourceSelection()` (selection hỗn hợp building + quân vô nghĩa với command).
+> - `Shift` + click vào đất trống / công trình / tài nguyên **không** xoá selection đang có
+>   (trước đây một cú shift-click hụt là mất cả đội).
+> - **Caveat macOS:** Phaser tự đổi `Ctrl + left click` thành chuột phải (`Pointer#down`,
+>   `OS.macOS && event.ctrlKey` → `buttons = 2`). Vì vậy `handlePointerDown` đọc
+>   `pointer.event.button === 0 && ctrlKey` để nhận diện left-click thật, và
+>   `create()` gọi `this.input.mouse?.disableContextMenu()` cho context menu của trình duyệt
+>   không bật lên. `Cmd + click` cũng được nhận (alias trên macOS).
+> - Thêm `src/vite-env.d.ts` + hook dev-only `window.__worldScene` trong `PhaserGame.tsx`
+>   để test bằng browser đọc được selection mà HUD không hiển thị.
+>
+> **Verify (browser thật, 1280×577, 3 dân):** click đơn → 1; shift+click → 2; shift+click lại
+> → 1; shift+box → cộng dồn; box thường → thay thế; double-click → toàn bộ dân trong khung;
+> `Ctrl+click` → như double-click; dời camera để 1 dân ra ngoài viewport → double-click chỉ
+> lấy 2 dân còn trong khung. Regression: `Ctrl+1`/`1` vẫn gán–gọi nhóm, chuột phải vẫn ra
+> lệnh move (`IDLE → MOVING`). `tsc --noEmit` sạch cho cả client và server.
+
 ---
 
 ## CTL-03 — Lệnh Stop (phím `S`)

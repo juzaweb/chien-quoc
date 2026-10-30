@@ -186,6 +186,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             <span className="text-amber-400 font-mono">Chuột trái</span> chọn / quét quân,{' '}
             <span className="text-amber-400 font-mono">Chuột phải</span> điều quân & khai thác
           </div>
+          <div>
+            <span className="text-amber-400 font-mono">Shift</span> + click để cộng/bớt quân,{' '}
+            <span className="text-amber-400 font-mono">Ctrl</span> + click hoặc double-click chọn
+            cùng loại
+          </div>
+          <div>
+            <span className="text-amber-400 font-mono">Ctrl + 1..9</span> gán nhóm,{' '}
+            <span className="text-amber-400 font-mono">1..9</span> gọi lại nhóm
+          </div>
         </div>
       </div>
     </div>

@@ -83,6 +83,12 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
         scene.onSelectionChange = onSelectionChange;
         scene.onPlacementCancelled = onPlacementCancelled;
 
+        // Dev-only handle so browser tests can inspect state that the React HUD
+        // does not expose (selection sets, camera, sprites).
+        if (import.meta.env.DEV) {
+          (window as unknown as { __worldScene?: WorldScene }).__worldScene = scene;
+        }
+
         if (playerNameRef.current) {
           scene.setPlayerName(playerNameRef.current);
         }
