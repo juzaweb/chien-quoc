@@ -87,14 +87,14 @@ flowchart TD
 
 | Task | Phase | Size | Status |
 | --- | --- | --- | --- |
-| BUG-01a | 0 | S | TODO |
-| BUG-01b | 0 | S | TODO |
-| BUG-02 | 0 | S | TODO |
-| BUG-03 | 0 | S | TODO |
-| BUG-04 | 0 | S | TODO |
-| BUG-05 | 0 | S | TODO |
-| BUG-06 | 0 | M | TODO |
-| BUG-07 | 0 | S | TODO |
+| BUG-01a | 0 | S | DONE |
+| BUG-01b | 0 | S | DONE |
+| BUG-02 | 0 | S | DONE |
+| BUG-03 | 0 | S | DONE |
+| BUG-04 | 0 | S | DONE |
+| BUG-05 | 0 | S | DONE |
+| BUG-06 | 0 | M | DONE |
+| BUG-07 | 0 | S | DONE |
 | CTL-01 | 1 | M | TODO |
 | CTL-02 | 1 | M | TODO |
 | CTL-03 | 1 | M | TODO |

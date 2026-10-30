@@ -176,7 +176,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
 
         <div className="mt-4 text-[11px] text-slate-400 space-y-1">
           <div>
-            Phím <span className="text-amber-400 font-mono">WASD / Phím mũi tên</span> để di chuyển camera
+            <span className="text-amber-400 font-mono">Phím mũi tên</span> hoặc rê chuột ra{' '}
+            <span className="text-amber-400 font-mono">mép màn hình</span> để di chuyển camera
           </div>
           <div>
             Cuộn <span className="text-amber-400 font-mono">Chuột</span> để phóng to/thu nhỏ

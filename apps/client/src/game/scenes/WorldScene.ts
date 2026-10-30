@@ -9,6 +9,7 @@ import {
   NetworkMessage,
   TILE_HEIGHT,
   TILE_WIDTH,
+  UNIT_BLUEPRINTS,
   gridToScreen,
   screenToGrid,
   getIsoDepth,
@@ -17,6 +18,25 @@ import {
   RoadSplinePoint
 } from '@chien-quoc/shared';
 import { generateProceduralTextures } from '../renderers/ProceduralSprites.js';
+
+/**
+ * How far the pointer may travel (in world pixels) before a left-button press
+ * counts as a box-drag instead of a click.
+ *
+ * The tolerance has to grow with zoom: hand jitter is roughly constant on screen,
+ * so a fixed world threshold would make clicking nearly impossible when zoomed in.
+ * It also must not shrink below what a human can physically hold steady, otherwise
+ * a plain click while zoomed way out turns into an accidental box-drag (which
+ * wipes the current selection).
+ */
+const CLICK_DRAG_THRESHOLD_WORLD_PX = 8;
+const CLICK_DRAG_MIN_SCREEN_PX = 6;
+
+/**
+ * Width of the screen-border band that pans the camera while the pointer rests
+ * there, in CSS pixels. Set to 0 to disable edge scrolling.
+ */
+const EDGE_SCROLL_SIZE_PX = 24;
 
 export interface SelectedEntityData {
   id: string;
@@ -39,7 +59,6 @@ export class WorldScene extends Phaser.Scene {
   private eventsBoundRoom: Room | null = null;
 
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private wasdKeys!: { [key: string]: Phaser.Input.Keyboard.Key };
 
   // Entity visual objects
   private tilePool: Phaser.GameObjects.Image[] = [];
@@ -198,12 +217,8 @@ export class WorldScene extends Phaser.Scene {
     // 5. Camera & Controls
     if (this.input.keyboard) {
       this.cursors = this.input.keyboard.createCursorKeys();
-      this.wasdKeys = this.input.keyboard.addKeys({
-        up: Phaser.Input.Keyboard.KeyCodes.W,
-        left: Phaser.Input.Keyboard.KeyCodes.A,
-        down: Phaser.Input.Keyboard.KeyCodes.S,
-        right: Phaser.Input.Keyboard.KeyCodes.D
-      }) as any;
+      // WASD is intentionally NOT bound: it collides with the Q/W/E/R/T build
+      // hotkeys in App.tsx. Panning is arrows + edge scroll (see update()).
     }
 
     // Initial camera position centered on map - normal 1.0 zoom
@@ -583,6 +598,7 @@ export class WorldScene extends Phaser.Scene {
     const sheetKey = `unit_${unitType}_sheet`;
     const idleKey = `unit_${unitType}_idle`;
     const hasSheet = this.textures.exists(sheetKey);
+    const blueprint = UNIT_BLUEPRINTS[unitType as keyof typeof UNIT_BLUEPRINTS];
 
     let unitDisplay: Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;
     const isCavalry = unitType === 'CAVALRY';
@@ -608,6 +624,12 @@ export class WorldScene extends Phaser.Scene {
 
     container.add(unitDisplay);
     container.setData('unitDisplay', unitDisplay);
+    // Body ellipse measured from the sprite sheet content box (villager/spearman
+    // content spans y 13..123 at scale 0.72, cavalry y 29..155 at 0.75), expressed
+    // relative to the container origin which sits at the unit's feet.
+    container.setData('bodyOffsetY', isCavalry ? -43 : -37);
+    container.setData('bodyRadiusX', isCavalry ? 50 : 36);
+    container.setData('bodyRadiusY', isCavalry ? 46 : 40);
 
     // Selected indicator ring (AoE ground ellipse under feet, scaled for 128x64 tiles)
     const selectRing = this.add.graphics();
@@ -634,30 +656,42 @@ export class WorldScene extends Phaser.Scene {
     this.unitTargetPositions.set(id, { x: unit.x, y: unit.y, hp: unit.hp, maxHp: unit.maxHp });
 
     const updateVisualState = (actionState: string) => {
-      if (hasSheet && unitDisplay instanceof Phaser.GameObjects.Sprite) {
-        if (actionState === 'MOVING') {
-          const walkAnim = `${lowerType}_walk`;
-          if (this.anims.exists(walkAnim) && unitDisplay.anims.currentAnim?.key !== walkAnim) {
-            unitDisplay.play(walkAnim);
-          }
-        } else if (actionState === 'HARVESTING') {
-          const harvestAnim = 'villager_harvest';
-          if (this.anims.exists(harvestAnim) && unitDisplay.anims.currentAnim?.key !== harvestAnim) {
-            unitDisplay.play(harvestAnim);
-          }
-        } else if (actionState === 'ATTACKING') {
-          const attackAnim = `${lowerType}_attack`;
-          if (this.anims.exists(attackAnim) && unitDisplay.anims.currentAnim?.key !== attackAnim) {
-            unitDisplay.play(attackAnim);
-          }
-        } else {
-          const idleAnim = `${lowerType}_idle`;
-          if (this.anims.exists(idleAnim) && unitDisplay.anims.currentAnim?.key !== idleAnim) {
-            unitDisplay.play(idleAnim);
-          }
-        }
+      if (!hasSheet || !(unitDisplay instanceof Phaser.GameObjects.Sprite)) return;
+
+      const idleAnim = `${lowerType}_idle`;
+      const walkAnim = `${lowerType}_walk`;
+      // Only villagers have a harvest animation; only combat units have an attack one.
+      const harvestAnim = blueprint?.canHarvest ? 'villager_harvest' : null;
+      const attackAnim = `${lowerType}_attack`;
+
+      let desired: string | null;
+      switch (actionState) {
+        case 'MOVING':
+          desired = walkAnim;
+          break;
+        case 'HARVESTING':
+          desired = harvestAnim ?? idleAnim;
+          break;
+        case 'ATTACKING':
+          // Villagers have no attack animation — fall back to idle instead of
+          // freezing on whatever clip happened to be playing before.
+          desired = attackAnim;
+          break;
+        default:
+          desired = idleAnim;
+      }
+
+      if (!desired || !this.anims.exists(desired)) {
+        desired = idleAnim;
+      }
+      if (this.anims.exists(desired) && unitDisplay.anims.currentAnim?.key !== desired) {
+        unitDisplay.play(desired);
       }
     };
+
+    // Expose the state-driven animation helper so update() never has to guess
+    // which animation key belongs to this unit type.
+    container.setData('updateVisualState', updateVisualState);
 
     updateVisualState(unit.actionState);
 
@@ -787,7 +821,7 @@ export class WorldScene extends Phaser.Scene {
 
     if (pointer.leftButtonDown()) {
       if (this.buildingToPlace) {
-        this.commitBuildingPlacement();
+        this.commitBuildingPlacement(pointer);
       } else {
         // Start Drag selection box
         this.isDragSelecting = true;
@@ -801,9 +835,15 @@ export class WorldScene extends Phaser.Scene {
       this.isDragSelecting = false;
       this.dragSelectionGraphics.clear();
 
-      const dragDistance = Math.hypot(pointer.x - this.dragStartScreen.x, pointer.y - this.dragStartScreen.y);
+      // Compare in world pixels so the tolerance tracks zoom. Clamped so that
+      // zooming all the way out cannot shrink click tolerance to a couple of
+      // screen pixels (which would turn steady clicks into accidental box-drags).
+      const zoom = this.cameras.main.zoom;
+      const screenDistance = Math.hypot(pointer.x - this.dragStartScreen.x, pointer.y - this.dragStartScreen.y);
+      const dragDistanceWorld = screenDistance / zoom;
+      const threshold = Math.max(CLICK_DRAG_THRESHOLD_WORLD_PX, CLICK_DRAG_MIN_SCREEN_PX / zoom);
 
-      if (dragDistance > 8) {
+      if (dragDistanceWorld > threshold) {
         // Box Selection
         this.performBoxSelection(this.dragStartScreen, { x: pointer.x, y: pointer.y });
       } else {
@@ -813,19 +853,39 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Unit body ellipse in world coordinates, derived from the sprite sheet content
+   * box and stored on the container at creation time. Every pointer interaction
+   * (left-click, right-click, box-select) reads it from here, so they can never
+   * disagree about where the unit actually is.
+   */
+  private getUnitBodyBox(container: Phaser.GameObjects.Container) {
+    const centerY = container.y + ((container.getData('bodyOffsetY') as number) ?? -37);
+    const radiusX = (container.getData('bodyRadiusX') as number) ?? 36;
+    const radiusY = (container.getData('bodyRadiusY') as number) ?? 40;
+    return { centerX: container.x, centerY, radiusX, radiusY };
+  }
+
+  private hitTestUnit(worldX: number, worldY: number, container: Phaser.GameObjects.Container): boolean {
+    const { centerX, centerY, radiusX, radiusY } = this.getUnitBodyBox(container);
+    const nx = (worldX - centerX) / radiusX;
+    const ny = (worldY - centerY) / radiusY;
+    return nx * nx + ny * ny <= 1;
+  }
+
   private performSingleClickSelection(pointer: Phaser.Input.Pointer) {
     const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
     const clickGrid = screenToGrid(worldPoint.x, worldPoint.y);
 
     this.clearSelection();
 
-    // Check click on units first (check distance to unit visual center)
+    // Check click on units first (shared hit-test, topmost depth wins)
     let clickedUnitId: string | null = null;
+    let clickedUnitDepth = -Infinity;
     this.unitSprites.forEach((container, unitId) => {
-      // Unit visual center is offset vertically around y - 18
-      const dist = Math.hypot(container.x - worldPoint.x, (container.y - 18) - worldPoint.y);
-      if (dist < 32) {
+      if (this.hitTestUnit(worldPoint.x, worldPoint.y, container) && container.depth > clickedUnitDepth) {
         clickedUnitId = unitId;
+        clickedUnitDepth = container.depth;
       }
     });
 
@@ -920,11 +980,12 @@ export class WorldScene extends Phaser.Scene {
     this.unitSprites.forEach((container, unitId) => {
       const unit = this.room?.state.units.get(unitId);
       if (unit && unit.ownerId === this.mySessionId) {
-        // Check overlap against unit's visual bounding box
-        const unitLeft = container.x - 24;
-        const unitRight = container.x + 24;
-        const unitTop = container.y - 50;
-        const unitBottom = container.y + 10;
+        // Same body box as hitTestUnit, as an AABB so partial overlap still counts.
+        const { centerY, radiusX, radiusY } = this.getUnitBodyBox(container);
+        const unitLeft = container.x - radiusX;
+        const unitRight = container.x + radiusX;
+        const unitTop = centerY - radiusY;
+        const unitBottom = centerY + radiusY;
 
         const overlaps = unitRight >= minX && unitLeft <= maxX && unitBottom >= minY && unitTop <= maxY;
         if (overlaps) {
@@ -962,13 +1023,15 @@ export class WorldScene extends Phaser.Scene {
     const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
     const targetGrid = screenToGrid(worldPoint.x, worldPoint.y);
 
-    // 1. Check if right-clicked on an enemy unit
+    // 1. Check if right-clicked on an enemy unit (shared hit-test with left-click)
     let targetEnemyUnitId: string | null = null;
+    let targetEnemyUnitDepth = -Infinity;
     this.room.state.units.forEach((unit: any, uId: string) => {
       if (unit.ownerId !== this.mySessionId) {
         const container = this.unitSprites.get(uId);
-        if (container && Math.hypot(container.x - worldPoint.x, container.y - worldPoint.y) < 25) {
+        if (container && this.hitTestUnit(worldPoint.x, worldPoint.y, container) && container.depth > targetEnemyUnitDepth) {
           targetEnemyUnitId = uId;
+          targetEnemyUnitDepth = container.depth;
         }
       }
     });
@@ -1042,6 +1105,30 @@ export class WorldScene extends Phaser.Scene {
     this.showCommandFeedback(worldPoint.x, worldPoint.y, 0x22c55e);
   }
 
+  /**
+   * Pans the camera when the pointer sits inside the screen border band.
+   * Uses `activePointer` screen coordinates, which are immune to camera scroll,
+   * and skips entirely when the pointer is off-canvas or over the React HUD
+   * (the pointer then reports negative / out-of-range coordinates).
+   */
+  private applyEdgeScroll(cameraSpeed: number) {
+    if (EDGE_SCROLL_SIZE_PX <= 0) return;
+
+    const pointer = this.input.activePointer;
+    const width = this.scale.width;
+    const height = this.scale.height;
+
+    // Pointer outside the game canvas (e.g. hovering the HUD panel).
+    if (pointer.x < 0 || pointer.y < 0 || pointer.x > width || pointer.y > height) return;
+
+    const cam = this.cameras.main;
+    if (pointer.x <= EDGE_SCROLL_SIZE_PX) cam.scrollX -= cameraSpeed;
+    else if (pointer.x >= width - EDGE_SCROLL_SIZE_PX) cam.scrollX += cameraSpeed;
+
+    if (pointer.y <= EDGE_SCROLL_SIZE_PX) cam.scrollY -= cameraSpeed;
+    else if (pointer.y >= height - EDGE_SCROLL_SIZE_PX) cam.scrollY += cameraSpeed;
+  }
+
   private showCommandFeedback(x: number, y: number, color: number) {
     const feedback = this.add.graphics();
     feedback.lineStyle(2, color, 1);
@@ -1110,22 +1197,31 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private commitBuildingPlacement() {
+  private commitBuildingPlacement(pointer: Phaser.Input.Pointer) {
     if (!this.buildingToPlace || !this.room) return;
     const blueprint = BUILDING_BLUEPRINTS[this.buildingToPlace];
 
-    if (this.isPlacementValid(this.hoverGridCoord.gridX, this.hoverGridCoord.gridY, blueprint)) {
-      this.room.send(NetworkMessage.PLACE_BUILDING, {
-        type: this.buildingToPlace,
-        gridX: this.hoverGridCoord.gridX,
-        gridY: this.hoverGridCoord.gridY
-      });
+    // Recompute from the pointer that actually clicked. `hoverGridCoord` is only
+    // refreshed on pointermove, so a click right after a camera pan (or any input
+    // source that skips pointermove) would otherwise place the building at a stale
+    // coordinate.
+    const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
+    const { gridX, gridY } = screenToGrid(worldPoint.x, worldPoint.y);
+    this.hoverGridCoord = { gridX, gridY };
+
+    if (this.isPlacementValid(gridX, gridY, blueprint)) {
+      this.room.send(NetworkMessage.PLACE_BUILDING, { type: this.buildingToPlace, gridX, gridY });
       this.cancelBuildingPlacement();
+      return;
     }
+
+    // Stay in placement mode (AoE lets you retry another tile) but tell the player
+    // why nothing happened, at the spot they clicked.
+    const ghostPos = gridToScreen(gridX + blueprint.sizeX / 2 - 0.5, gridY + blueprint.sizeY / 2 - 0.5);
+    this.showCommandFeedback(ghostPos.x, ghostPos.y, 0xef4444);
   }
 
-  public panTo(gridX: number, gridY: number) {
-    const screenPos = gridToScreen(gridX, gridY);
+  public panTo(gridX: number, gridY: number) {    const screenPos = gridToScreen(gridX, gridY);
     this.cameras.main.pan(screenPos.x, screenPos.y, 350, 'Power2');
   }
 
@@ -1308,19 +1404,14 @@ export class WorldScene extends Phaser.Scene {
     const dtSeconds = delta / 1000;
     const cameraSpeed = (600 / this.cameras.main.zoom) * dtSeconds;
 
-    // Pan camera via WASD / Arrow keys
-    if (this.cursors.left.isDown || this.wasdKeys.left.isDown) {
-      this.cameras.main.scrollX -= cameraSpeed;
-    }
-    if (this.cursors.right.isDown || this.wasdKeys.right.isDown) {
-      this.cameras.main.scrollX += cameraSpeed;
-    }
-    if (this.cursors.up.isDown || this.wasdKeys.up.isDown) {
-      this.cameras.main.scrollY -= cameraSpeed;
-    }
-    if (this.cursors.down.isDown || this.wasdKeys.down.isDown) {
-      this.cameras.main.scrollY += cameraSpeed;
-    }
+    // Pan camera via arrow keys and screen edges. WASD is deliberately unused
+    // because W/A/S/D double as build hotkeys in App.tsx.
+    if (this.cursors.left.isDown) this.cameras.main.scrollX -= cameraSpeed;
+    if (this.cursors.right.isDown) this.cameras.main.scrollX += cameraSpeed;
+    if (this.cursors.up.isDown) this.cameras.main.scrollY -= cameraSpeed;
+    if (this.cursors.down.isDown) this.cameras.main.scrollY += cameraSpeed;
+
+    this.applyEdgeScroll(cameraSpeed);
 
     // Smooth unit position interpolation (Lerp)
     this.unitTargetPositions.forEach((target, unitId) => {
@@ -1342,24 +1433,22 @@ export class WorldScene extends Phaser.Scene {
             unitDisplay.setFlipX(dx < 0);
           }
 
-          // Trigger walk animation in real-time whenever unit is moving
-          if (unitDisplay instanceof Phaser.GameObjects.Sprite && this.anims.exists('villager_walk')) {
-            const unit = this.room?.state.units.get(unitId);
-            const isHarvesting = unit?.actionState === 'HARVESTING';
-
+          // Drive animation from the unit's own type/action state. Never hardcode
+          // a key here: `updateVisualState` knows `${type}_walk|idle|attack|harvest`.
+          const updateVisualState = container.getData('updateVisualState') as
+            | ((actionState: string) => void)
+            | undefined;
+          if (updateVisualState) {
+            const serverState = this.room?.state.units.get(unitId)?.actionState ?? 'IDLE';
+            // Position lerp is authoritative for "is it actually walking right now".
+            let effectiveState = serverState;
             if (moveDist > 0.15) {
-              if (unitDisplay.anims.currentAnim?.key !== 'villager_walk') {
-                unitDisplay.play('villager_walk');
-              }
-            } else if (isHarvesting) {
-              if (unitDisplay.anims.currentAnim?.key !== 'villager_harvest') {
-                unitDisplay.play('villager_harvest');
-              }
-            } else {
-              if (unitDisplay.anims.currentAnim?.key !== 'villager_idle') {
-                unitDisplay.play('villager_idle');
-              }
+              effectiveState = 'MOVING';
+            } else if (serverState === 'MOVING') {
+              // Server still reports MOVING but the sprite has settled (arrived).
+              effectiveState = 'IDLE';
             }
+            updateVisualState(effectiveState);
           }
         }
       }

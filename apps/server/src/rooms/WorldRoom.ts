@@ -8,6 +8,7 @@ import {
   INITIAL_POPULATION_CAP,
   MAP_GRID_HEIGHT,
   MAP_GRID_WIDTH,
+  MAX_SELECTION,
   NetworkMessage,
   POPULATION_PER_HOUSE,
   PlaceBuildingPayload,
@@ -693,6 +694,14 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
   private handleMoveUnits(client: Client, payload: MoveUnitsPayload) {
     if (!payload.unitIds || payload.unitIds.length === 0) return;
+    if (payload.unitIds.length > MAX_SELECTION) {
+      this.rejectCommand(client, 'Too many units in one command');
+      return;
+    }
+    if (!Number.isFinite(payload.targetGridX) || !Number.isFinite(payload.targetGridY)) {
+      this.rejectCommand(client, 'Invalid move target');
+      return;
+    }
 
     payload.unitIds.forEach((uId, idx) => {
       const unit = this.state.units.get(uId);
@@ -752,6 +761,31 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   private handleAttackTarget(client: Client, payload: AttackTargetPayload) {
+    if (!payload.unitIds || payload.unitIds.length === 0) return;
+    if (payload.unitIds.length > MAX_SELECTION) {
+      this.rejectCommand(client, 'Too many units in one command');
+      return;
+    }
+
+    // The client chooses targetEntityId/targetType freely, so resolve the target
+    // from authoritative state and reject anything that is missing or friendly.
+    // Without this a client can order units to attack an ally or itself.
+    const target =
+      payload.targetType === 'unit'
+        ? this.state.units.get(payload.targetEntityId)
+        : payload.targetType === 'building'
+          ? this.state.buildings.get(payload.targetEntityId)
+          : undefined;
+
+    if (!target) {
+      this.rejectCommand(client, 'Target no longer exists');
+      return;
+    }
+    if (target.ownerId === client.sessionId) {
+      this.rejectCommand(client, 'Cannot attack your own units or buildings');
+      return;
+    }
+
     payload.unitIds.forEach((uId) => {
       const unit = this.state.units.get(uId);
       if (unit && unit.ownerId === client.sessionId) {
@@ -763,12 +797,25 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   private handleHarvestResource(client: Client, payload: HarvestResourcePayload) {
+    if (!payload.unitIds || payload.unitIds.length === 0) return;
+    if (payload.unitIds.length > MAX_SELECTION) {
+      this.rejectCommand(client, 'Too many units in one command');
+      return;
+    }
+
     const resource = this.state.resourceNodes.get(payload.resourceNodeId);
-    if (!resource) return;
+    if (!resource) {
+      this.rejectCommand(client, 'Resource node no longer exists');
+      return;
+    }
+    if (resource.remainingAmount <= 0) {
+      this.rejectCommand(client, 'Resource node is depleted');
+      return;
+    }
 
     payload.unitIds.forEach((uId) => {
       const unit = this.state.units.get(uId);
-      if (unit && unit.ownerId === client.sessionId && unit.type === 'VILLAGER') {
+      if (unit && unit.ownerId === client.sessionId && UNIT_BLUEPRINTS[unit.type as UnitType]?.canHarvest) {
         unit.targetEntityId = payload.resourceNodeId;
         unit.targetEntityType = 'resource';
         unit.targetX = resource.gridX;
@@ -776,6 +823,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         unit.actionState = 'HARVESTING';
       }
     });
+  }
+
+  /** Notify a client that a command was refused, so the UI can explain why. */
+  private rejectCommand(client: Client, message: string) {
+    client.send(NetworkMessage.ERROR_NOTIFICATION, { message });
   }
 
   private update(deltaTime: number) {

@@ -8,6 +8,13 @@ export const MAP_GRID_HEIGHT = 220;
 
 export const SERVER_TICK_RATE = 20; // 20 ticks per second (50ms per tick)
 
+/**
+ * Upper bound on how many unit ids a single client command may reference.
+ * Guards the authoritative handlers against a client sending thousands of ids
+ * in one message to force unbounded per-tick work.
+ */
+export const MAX_SELECTION = 120;
+
 export const INITIAL_PLAYER_RESOURCES: Resources = {
   wood: 300,
   food: 300,

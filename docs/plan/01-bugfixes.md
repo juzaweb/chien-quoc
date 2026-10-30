@@ -38,6 +38,15 @@ Không có edge scroll thì bỏ WASD sẽ khiến pan rất khó chịu, nên l
 **File:** `apps/client/src/game/scenes/WorldScene.ts`
 **Cách kiểm:** để chuột ở mép trái màn hình → camera pan sang trái; bấm `W` → chỉ mở Barracks.
 
+> **DONE (cả a và b).**
+> - `BUG-01a`: xoá field `wasdKeys`, xoá `addKeys({W,A,S,D})` trong `create()`, xoá 4 nhánh
+>   `this.wasdKeys.*.isDown` trong `update()`. `W` giờ chỉ còn hotkey Barracks ở `App.tsx`.
+> - `BUG-01b`: thêm `applyEdgeScroll(cameraSpeed)` + hằng `EDGE_SCROLL_SIZE_PX = 24`.
+>   Đọc `input.activePointer` (toạ độ màn hình, không phụ thuộc camera); bỏ qua khi con trỏ
+>   ra ngoài canvas; hỗ trợ chéo góc; đặt hằng = 0 để tắt.
+> - Cập nhật hint ở `AuthScreen.tsx` (bỏ "WASD", thêm "mép màn hình").
+> - Verify: 4 cạnh + 2 góc chéo pan đúng chiều, giữa màn hình và ngoài canvas không pan.
+
 ---
 
 ## BUG-02 — Hit-test chuột phải lệch khỏi thân lính
@@ -61,6 +70,12 @@ Cả `performSingleClickSelection` và `handleRightClickCommand` gọi helper n�
 **File:** `apps/client/src/game/scenes/WorldScene.ts`
 **Cách kiểm:** chuột trái và chuột phải vào cùng một điểm trên thân lính địch → cùng nhận diện đúng unit.
 
+> **DONE.** Đã tách `getUnitBodyBox()` (hình học đo từ content box của spritesheet,
+> lưu vào container qua `bodyOffsetY`/`bodyRadiusX`/`bodyRadiusY`) + `hitTestUnit()`.
+> Dùng chung cho `performSingleClickSelection`, `handleRightClickCommand` và
+> `performBoxSelection`. Chọn theo depth nên click chồng nhiều lính vẫn ra lính trên cùng.
+> Đã verify bằng cách đo trực tiếp: hit ở đỉnh đầu / thân / chân / hai bên, miss khi ra ngoài.
+
 ---
 
 ## BUG-03 — Ngưỡng phân biệt click/kéo cứng 8px
@@ -78,6 +93,12 @@ if (dragDistance > 8) { /* box */ } else { /* click */ }
 ```
 
 **File:** `apps/client/src/game/scenes/WorldScene.ts`
+
+> **DONE.** Ngưỡng đổi thành world-pixel + sàn screen-pixel:
+> `threshold = max(CLICK_DRAG_THRESHOLD_WORLD_PX, CLICK_DRAG_MIN_SCREEN_PX / zoom)`
+> = `max(8, 6/zoom)`. Hằng số khai báo ở đầu file. Ở zoom 1.6–2.2 dung sai screen là
+> 12.8–17.6px nên jitter tay không còn thành kéo hộp; ở zoom 0.4 sàn 6px giữ cho click
+> vẫn cảm thấy bình thường thay vì siết còn 3.2px.
 
 ---
 
@@ -107,6 +128,11 @@ Tương tự cho `handleRightClickCommand` (đã tự tính — ok).
 
 **File:** `apps/client/src/game/scenes/WorldScene.ts`
 
+> **DONE.** `commitBuildingPlacement(pointer)` giờ nhận pointer và tự tính
+> `screenToGrid(pointer.positionToCamera(cam))` trước khi commit, ghi đè `hoverGridCoord`.
+> Nhánh hợp lệ gửi `PLACE_BUILDING` rồi thoát; nhánh sai gọi `showCommandFeedback(...,0xef4444)`
+> tại tâm ghost và **vẫn giữ** `buildingToPlace` để thử ô khác.
+
 ---
 
 ## BUG-06 — Server tin tưởng payload của client
@@ -127,6 +153,21 @@ Các lỗ hổng:
 - Chỉ chấp nhận `HARVEST_RESOURCE` cho unit `type === 'VILLAGER'` **và** `blueprint.canHarvest`.
 
 **File:** `apps/server/src/rooms/WorldRoom.ts`, `packages/shared/src/constants/index.ts`
+
+> **DONE.** Thêm `MAX_SELECTION = 120` vào shared và helper `rejectCommand(client, msg)`.
+> - `MOVE_UNITS`: chặn `unitIds.length > MAX_SELECTION`, chặn toạ độ `NaN/Infinity`.
+> - `ATTACK_TARGET`: tra target theo `targetType` từ state thật; thiếu → `Target no longer exists`;
+>   `ownerId === sessionId` → `Cannot attack your own units or buildings`.
+> - `HARVEST_RESOURCE`: kiểm tra node tồn tại, `remainingAmount > 0`, và dùng
+>   `UNIT_BLUEPRINTS[type].canHarvest` thay vì so cứng `=== 'VILLAGER'`.
+>
+> **Lưu ý vận hành:** server đọc `packages/shared/dist`, nên sau khi sửa shared phải
+> `cd packages/shared && ../../node_modules/.bin/tsc` rồi restart server, nếu không hằng mới
+> sẽ là `undefined` và guard âm thầm bị bỏ qua.
+>
+> **Lưu ý test:** `ws` chặn frame quá lớn ở tầng transport (không tới handler). Muốn test
+> nhánh `MAX_SELECTION` phải dùng payload vừa đủ lớn nhưng dưới ngưỡng frame — 150 id
+> (~1.9KB) là đủ, 500 id (6.4KB) làm đứt socket.
 
 ---
 
@@ -149,10 +190,19 @@ nhưng `update()` lại ghi đè bằng key cứng.
 
 **File:** `apps/client/src/game/scenes/WorldScene.ts` (`createUnitSprite`, `update`)
 
+> **DONE.** `updateVisualState` giờ là một `switch` trên `actionState`, lưu vào container
+> qua `setData('updateVisualState', fn)`; `update()` chỉ gọi lại nó, không còn key cứng.
+> Có fallback đúng: villager không có `_attack` → về `_idle` thay vì kẹt clip cũ;
+> lính không harvest thì `HARVESTING` → `_idle`. `update()` ưu tiên trạng thái lerp thật
+> (`MOVING` khi còn di chuyển, `IDLE` khi đã dừng) nên không bị "trượt chân tại chỗ".
+> Ma trận đã verify: 4 loại lính × 4 trạng thái đều đúng.
+
 ---
 
 ## Thứ tự làm
 
-`BUG-02` → `BUG-07` → `BUG-03` → `BUG-04` → `BUG-05` → `BUG-01a` → `BUG-01b` → `BUG-06`
+`BUG-02` ✅ → `BUG-07` ✅ → `BUG-03` ✅ → `BUG-04` ✅ → `BUG-05` ✅ → `BUG-01a` ✅ → `BUG-01b` ✅ → `BUG-06` ✅
+
+Phase 0 hoàn tất. Tiếp theo: Phase 1 (`CTL-01`).
 
 (Bug phía client gom một lượt cho dễ test, `BUG-06` cần sửa shared nên tách commit.)
