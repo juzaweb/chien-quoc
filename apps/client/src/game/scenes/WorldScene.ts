@@ -248,6 +248,7 @@ export class WorldScene extends Phaser.Scene {
       // WASD is intentionally NOT bound: it collides with the Q/W/E/R/T build
       // hotkeys in App.tsx. Panning is arrows + edge scroll (see update()).
       this.bindControlGroupKeys(this.input.keyboard);
+      this.bindStopKey(this.input.keyboard);
     }
 
     // Ctrl+left-click is the same-type selection shortcut (CTL-02). On macOS the
@@ -1183,6 +1184,45 @@ export class WorldScene extends Phaser.Scene {
           this.recallControlGroup(index);
         }
       });
+    });
+  }
+
+  /**
+   * CTL-03: `S` cancels the current order of every selected unit and leaves it
+   * standing where it is.
+   *
+   * Modifier combos are ignored on purpose: Ctrl/Cmd+S is the browser's Save
+   * dialog, and Shift/Alt+S belong to future hotkey layers.
+   */
+  private bindStopKey(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    keyboard.on('keydown-S', (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      // A pending building placement owns the keyboard; stopping units there
+      // would fire an invisible command while the player is placing a farm.
+      if (this.buildingToPlace) return;
+      if (this.selectedUnitIds.size === 0) return;
+
+      event.preventDefault();
+      this.stopSelectedUnits();
+    });
+  }
+
+  /**
+   * Halts the selection in place. The server is authoritative; this only sends
+   * the craft. Local prediction would fight the server snapshot for liveness.
+   */
+  public stopSelectedUnits() {
+    if (!this.room || this.selectedUnitIds.size === 0) return;
+
+    const unitIds = Array.from(this.selectedUnitIds);
+    this.room.send(NetworkMessage.STOP_UNITS, { unitIds });
+
+    // Ring on the ground at each stopped unit, so the command has visible
+    // effect even when the unit was already standing still (IDLE -> IDLE).
+    unitIds.forEach((uId) => {
+      const container = this.unitSprites.get(uId);
+      if (container) this.showCommandFeedback(container.x, container.y, 0xfacc15);
     });
   }
 

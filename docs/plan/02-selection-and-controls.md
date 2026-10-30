@@ -113,6 +113,48 @@ tạm dùng `Delete` rồi đổi lại.
 
 **File:** shared types, `WorldRoom.ts`, `WorldScene.ts`
 
+> **DONE.**
+> - Protocol: `StopUnitsPayload { unitIds: string[] }` + `NetworkMessage.STOP_UNITS`
+>   trong shared; import/validate như mọi handler khác.
+> - Server `handleStopUnits`: chặn quá `MAX_SELECTION`, chỉ nhận unit của chính
+>   client; set `actionState = 'IDLE'`, xoá `targetEntityId`/`targetEntityType`,
+>   `targetX/targetY = unit.x/unit.y` (nên nhánh movement trong `update()` không còn
+>   gì để đi tiếp).
+>   **Không xoá `attackTimers`/`harvestTimers`**: đó là state của unit, không phải
+>   state của lệnh. Xoá `atk_<id>` sẽ reset cooldown vũ khí, cho phép spam
+>   stop + attack để đánh mỗi tick thay vì mỗi cooldown; giữ `harv_<id>` thì tiến độ
+>   hái dở được bảo toàn.
+>   Không đụng `queueTargetX/Y` vì `CTL-05` chưa làm.
+> - Client `bindStopKey` (`keydown-S`): bỏ qua `event.repeat` (giữ phím không spam
+>   lệnh), bỏ qua khi có `Ctrl/Cmd/Shift/Alt` (Ctrl/Cmd+S
+>   là Save của trình duyệt), bỏ qua khi đang ở chế độ đặt công trình
+>   (`buildingToPlace`) hoặc không có quân nào được chọn; ngược lại `preventDefault()`
+>   rồi gửi `STOP_UNITS` với `selectedUnitIds`. Mỗi unit được vẽ vòng vàng tại chỗ
+>   để lệnh có phản hồi thị giác kể cả khi unit vốn đã đứng yên.
+> - Hint trong `AuthScreen.tsx` thêm dòng `S` dừng quân.
+>
+> **Verify (browser thật, account test, 3 dân, zoom 1):**
+> - Move → `MOVING`, S → cả 3 `IDLE`, `targetX === x` (dừng giữa đường, không chạy
+>   nốt tới đích), toạ độ đóng băng qua 3s.
+> - Harvest (berry bush, food 450 → 510 trong lúc đang hái) → S → `IDLE`,
+>   `targetEntityId = ''`, food và `remainingAmount` của node đứng yên 3s.
+> - Attack (gửi `ATTACK_TARGET` trực tiếp vào unit địch) → `ATTACKING` → S →
+>   `IDLE`, `targetEntityId`/`targetEntityType` rỗng, `targetX === x`.
+> - `Shift+S` và `Alt+S` **không** dừng quân (`MOVING` giữ nguyên), `S` thường mới
+>   dừng. `Ctrl+S` cũng bị bỏ qua. Một lần nhấn = đúng 1 `STOP_UNITS` (đã đếm qua
+>   `room.send`); `autoRepeat` không gửi gì.
+> - Probe socket trực tiếp vào Colyseus: `MOVING` → `STOP_UNITS` → `IDLE`, toạ độ
+>   đứng yên sau 900ms, `targetX === x`; payload 121 id bị từ chối qua
+>   `ERROR_NOTIFICATION` nhưng room vẫn sống (cùng giới hạn `MAX_SELECTION`).
+> - Regression: `W` vẫn mở Barracks, `S` khi đang đặt nhà không làm gì, `Esc` huỷ
+>   đặt nhà, `Ctrl+1`/`1` gán–gọi nhóm vẫn đúng. `tsc --noEmit` sạch client + server.
+>
+> **Lưu ý test:** phím gửi bằng `KeyboardEvent` trên `window` phải chờ ≥1 frame —
+> Phaser xử lý keyboard qua queue trong game loop, đọc state ngay sau `dispatchEvent`
+> sẽ thấy giá trị cũ. Nếu sửa `WorldScene.ts` khi game đang chạy, HMR để lại listener
+> keyboard của scene cũ và một lần nhấn sẽ gửi lệnh nhiều lần — reload trang trước khi
+> đếm, đừng kết luận là bug khi chưa reload.
+
 ---
 
 ## CTL-04 — Idle cycle + về Town Center

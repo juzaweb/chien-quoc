@@ -16,6 +16,7 @@ import {
   TrainUnitPayload,
   AttackTargetPayload,
   HarvestResourcePayload,
+  StopUnitsPayload,
   SERVER_TICK_RATE,
   UNIT_BLUEPRINTS,
   UnitBlueprint,
@@ -83,6 +84,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     this.onMessage(NetworkMessage.HARVEST_RESOURCE, (client, message: HarvestResourcePayload) => {
       this.handleHarvestResource(client, message);
+    });
+
+    this.onMessage(NetworkMessage.STOP_UNITS, (client, message: StopUnitsPayload) => {
+      this.handleStopUnits(client, message);
     });
 
     // Run authoritative tick loop
@@ -822,6 +827,37 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         unit.targetY = resource.gridY;
         unit.actionState = 'HARVESTING';
       }
+    });
+  }
+
+  /**
+   * Halts the given units where they stand.
+   *
+   * Stop cancels the unit's order (move / attack / harvest) and leaves it at its
+   * exact position. `targetX/targetY` are reset to the current position so the
+   * movement branch in `update()` has nothing left to walk towards.
+   *
+   * Per-unit timers are deliberately NOT cleared: they hold unit state, not
+   * order state. Dropping `atk_<id>` would reset the weapon cooldown, letting a
+   * client spam stop + attack to land a hit every tick instead of every
+   * cooldown. Leaving `harv_<id>` alone keeps partial harvest progress.
+   */
+  private handleStopUnits(client: Client, payload: StopUnitsPayload) {
+    if (!payload?.unitIds || payload.unitIds.length === 0) return;
+    if (payload.unitIds.length > MAX_SELECTION) {
+      this.rejectCommand(client, 'Too many units in one command');
+      return;
+    }
+
+    payload.unitIds.forEach((uId) => {
+      const unit = this.state.units.get(uId);
+      if (!unit || unit.ownerId !== client.sessionId) return;
+
+      unit.actionState = 'IDLE';
+      unit.targetEntityId = '';
+      unit.targetEntityType = '';
+      unit.targetX = unit.x;
+      unit.targetY = unit.y;
     });
   }
 

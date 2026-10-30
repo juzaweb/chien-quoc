@@ -70,12 +70,22 @@ export interface HarvestResourcePayload {
   resourceNodeId: string;
 }
 
+/**
+ * Cancels whatever a unit is doing and leaves it standing where it is.
+ * Unlike MOVE_UNITS this never makes the unit walk anywhere, so it is the only
+ * way to halt mid-map (e.g. a villager halfway through a forest).
+ */
+export interface StopUnitsPayload {
+  unitIds: string[];
+}
+
 export enum NetworkMessage {
   PLACE_BUILDING = 'PLACE_BUILDING',
   MOVE_UNITS = 'MOVE_UNITS',
   TRAIN_UNIT = 'TRAIN_UNIT',
   ATTACK_TARGET = 'ATTACK_TARGET',
   HARVEST_RESOURCE = 'HARVEST_RESOURCE',
+  STOP_UNITS = 'STOP_UNITS',
   ERROR_NOTIFICATION = 'ERROR_NOTIFICATION',
   SYSTEM_ANNOUNCEMENT = 'SYSTEM_ANNOUNCEMENT'
 }

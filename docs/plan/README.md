@@ -98,7 +98,7 @@ flowchart TD
 | BUG-08 | 0 | S | DONE |
 | CTL-01 | 1 | M | DONE |
 | CTL-02 | 1 | M | DONE |
-| CTL-03 | 1 | M | TODO |
+| CTL-03 | 1 | M | DONE |
 | CTL-04 | 1 | S | TODO |
 | CTL-05 | 1 | L | TODO |
 | CTL-06 | 1 | M | TODO |

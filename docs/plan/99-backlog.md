@@ -51,3 +51,10 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 - **Giới hạn 200 population** (`MAX_POPULATION_LIMIT` đã có trong shared, chưa enforce).
 - **Unit collision** — lính hiện chồng lên nhau hoàn toàn.
 - **Fog of war** — chưa có khái niệm tầm nhìn.
+- **Timer rò rỉ cho unit đã chết** — `attackTimers`/`harvestTimers` không được xoá khi
+  unit bị xoá khỏi `state.units` (chết hoặc rời), nên key `atk_<id>`/`harv_<id>` nằm lại
+  vĩnh viễn. Dọn ở nhánh chết trong `processUnitCombat` hoặc ở `updatePlayerPopulation`.
+- **Hai hệ keybinding song song** — `WorldScene` bind qua Phaser keyboard (`S`,
+  `Ctrl+1..9`) còn `App.tsx` bind `window` keydown (`Q/W/E/R/T`, `Esc`). Hệ `window`
+  không chặn modifier nên `Ctrl+W` vừa đóng tab vừa kích hoạt Barracks. Gộp về một chỗ
+  và thêm guard modifier + `event.repeat`.

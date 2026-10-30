@@ -195,6 +195,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             <span className="text-amber-400 font-mono">Ctrl + 1..9</span> gán nhóm,{' '}
             <span className="text-amber-400 font-mono">1..9</span> gọi lại nhóm
           </div>
+          <div>
+            <span className="text-amber-400 font-mono">S</span> dừng quân đang chọn tại chỗ
+            (huỷ lệnh hiện tại)
+          </div>
         </div>
       </div>
     </div>
