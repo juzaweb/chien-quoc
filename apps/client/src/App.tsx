@@ -231,6 +231,22 @@ export const App: React.FC = () => {
     }
   };
 
+  // CMD-04a: cancel the head of a building's training queue. The server reads
+  // which unit that is from its own snapshot, so only the id is sent.
+  const handleCancelTrain = (buildingId: string) => {
+    if (room) {
+      room.send(NetworkMessage.CANCEL_TRAIN, { buildingId });
+    }
+  };
+
+  // CMD-04b: tear down a foundation that is still under construction. Named
+  // separately from handleCancelBuilding, which exits placement mode.
+  const handleCancelFoundation = (buildingId: string) => {
+    if (room) {
+      room.send(NetworkMessage.CANCEL_BUILDING, { buildingId });
+    }
+  };
+
   // CTL-07: right-click on the minimap is a move order, not a camera pan.
   const handleCommandAtGrid = (gx: number, gy: number) => {
     sceneRef.current?.commandMoveTo(gx, gy);
@@ -276,6 +292,8 @@ export const App: React.FC = () => {
             entity={selectedEntity}
             playerResources={resources}
             onTrainUnit={handleTrainUnit}
+            onCancelTrain={handleCancelTrain}
+            onCancelBuilding={handleCancelFoundation}
           />
 
           {/* Right: Building Construction Dock */}

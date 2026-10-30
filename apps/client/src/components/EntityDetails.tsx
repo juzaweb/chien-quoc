@@ -7,18 +7,24 @@ import {
   UNIT_BLUEPRINTS,
   UnitType
 } from '@chien-quoc/shared';
-import { Shield, Swords, UserPlus, Heart } from 'lucide-react';
+import { Shield, Swords, UserPlus, Heart, Hammer, X } from 'lucide-react';
 
 interface EntityDetailsProps {
   entity: SelectedEntityData | null;
   playerResources: Resources;
   onTrainUnit: (buildingId: string, unitType: UnitType) => void;
+  /** CMD-04a: drops the first unit in the training queue and refunds it. */
+  onCancelTrain: (buildingId: string) => void;
+  /** CMD-04b: removes a foundation that is still under construction. */
+  onCancelBuilding: (buildingId: string) => void;
 }
 
 export const EntityDetails: React.FC<EntityDetailsProps> = ({
   entity,
   playerResources,
-  onTrainUnit
+  onTrainUnit,
+  onCancelTrain,
+  onCancelBuilding
 }) => {
   if (!entity) {
     return (
@@ -121,6 +127,35 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
         </div>
       )}
 
+      {/* CMD-04b — Foundation still under construction */}
+      {entity.type === 'building' && entity.isOwner && entity.isConstructed === false && (
+        <div className="border-t border-slate-800 pt-2 space-y-1.5">
+          <div className="flex items-center justify-between text-[11px] text-slate-300">
+            <span className="flex items-center gap-1">
+              <Hammer size={12} className="text-amber-400" /> Đang xây dựng
+            </span>
+            <span className="font-mono text-amber-300">
+              {Math.floor(entity.constructionProgress ?? 0)}%
+            </span>
+          </div>
+          <div className="w-full h-2 rounded bg-slate-900 border border-slate-700 overflow-hidden">
+            <div
+              className="h-full bg-amber-500 transition-all duration-200"
+              style={{
+                width: `${Math.max(0, Math.min(100, entity.constructionProgress ?? 0))}%`
+              }}
+            />
+          </div>
+          <button
+            onClick={() => onCancelBuilding(entity.id)}
+            className="w-full px-2 py-1 rounded border border-red-800/70 bg-red-950/50 text-[10px] font-semibold text-red-300 hover:border-red-500 transition-all flex items-center justify-center gap-1"
+            title="Huỷ móng nhà, hoàn lại một phần tài nguyên"
+          >
+            <X size={12} /> Huỷ công trình (Delete)
+          </button>
+        </div>
+      )}
+
       {/* Unit Production Section (for owned buildings) */}
       {entity.isOwner && trainableUnits.length > 0 && (
         <div className="border-t border-slate-800 pt-2 space-y-1.5">
@@ -129,8 +164,18 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
               <UserPlus size={12} /> HUẤN LUYỆN QUÂN ĐỘI
             </span>
             {entity.trainingQueue && entity.trainingQueue.length > 0 && (
-              <span className="text-[10px] text-amber-300 font-mono">
-                Đang chờ: {entity.trainingQueue.length}
+              <span className="flex items-center gap-1">
+                <span className="text-[10px] text-amber-300 font-mono">
+                  Đang chờ: {entity.trainingQueue.length}
+                </span>
+                {/* CMD-04a — cancel the unit currently at the head of the queue */}
+                <button
+                  onClick={() => onCancelTrain(entity.id)}
+                  className="w-4 h-4 rounded border border-red-800/70 bg-red-950/60 text-red-300 hover:border-red-500 hover:text-red-200 flex items-center justify-center transition-all"
+                  title="Huỷ đơn vị đang huấn luyện, hoàn lại toàn bộ tài nguyên"
+                >
+                  <X size={10} />
+                </button>
               </span>
             )}
           </div>

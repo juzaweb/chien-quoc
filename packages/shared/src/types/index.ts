@@ -96,10 +96,30 @@ export interface SetRallyPointPayload {
   gridY: number;
 }
 
+/**
+ * CMD-04a: drops the unit at the head of a building's training queue and
+ * refunds its full cost. Only the building id is needed — the server reads the
+ * cancelled unit from the queue itself, so the client cannot choose what to
+ * refund.
+ */
+export interface CancelTrainPayload {
+  buildingId: string;
+}
+
+/**
+ * CMD-04b: tears down a foundation that was placed but not finished, refunding
+ * part of its cost. Completed buildings are rejected by the server.
+ */
+export interface CancelBuildingPayload {
+  buildingId: string;
+}
+
 export enum NetworkMessage {
   PLACE_BUILDING = 'PLACE_BUILDING',
   MOVE_UNITS = 'MOVE_UNITS',
   TRAIN_UNIT = 'TRAIN_UNIT',
+  CANCEL_TRAIN = 'CANCEL_TRAIN',
+  CANCEL_BUILDING = 'CANCEL_BUILDING',
   ATTACK_TARGET = 'ATTACK_TARGET',
   HARVEST_RESOURCE = 'HARVEST_RESOURCE',
   STOP_UNITS = 'STOP_UNITS',

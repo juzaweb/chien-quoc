@@ -76,6 +76,33 @@ với `spacing ≈ 0.6` tile (đủ để ring không chồng).
 
 **File:** `apps/server/src/rooms/WorldRoom.ts`
 
+> **DONE.**
+> - Thay offset 3 cột cứng bằng helper `computeFormationOffsets(count, spacing)`:
+>   khối vuông `cols = ceil(sqrt(n))`, `rows = ceil(n / cols)`, mỗi ô lệch
+>   `(col - (cols-1)/2) * spacing` / `(row - (rows-1)/2) * spacing` → trọng tâm đội
+>   rơi đúng ô click. `FORMATION_SPACING = 0.6` tile.
+> - Helper trả **offset** chứ không trả target đã clamp: việc clamp biên map và nhánh
+>   queue/plain move thuộc `handleMoveUnits`, nên CMD-01 (`handleAttackMove`) chỉ cần
+>   gọi cùng helper rồi dùng chung đoạn áp target.
+> - `handleMoveUnits` giờ **validate trước, xếp đội hình sau**: gom unit hợp lệ
+>   (đúng owner) vào một mảng rồi mới tính offset. Trước đây offset tính theo `idx`
+>   của payload, nên id lạ/chết để lại lỗ trong đội hình (đội 3 lính gửi kèm 1 id sai
+>   sẽ bị xếp thành khối 4 ô).
+> - Khử id trùng bằng `Set`: payload lặp id từng đẩy 2 lệnh + 2 offset cho cùng một unit.
+> - Nhánh `queue: true` dùng **cùng** offset (mỗi waypoint là một khối vuông riêng),
+>   nên di chuyển Shift-queue vẫn giữ đội hình thay vì dồn một điểm.
+>
+> **Verify (socket probe thật, 3 dân):** `(100,100)` → `(99.70,99.70) (100.30,99.70) (99.70,100.30)`;
+> payload lặp id `[u,u]` → đúng `(130.00,130.00)` (dedupe, không lệch 0.3);
+> `(219,219)` → `218.70/219.00` (clamp biên); payload `[u_bogus, u]` → unit hợp lệ nhận
+> đúng `(60.00,60.00)` thay vì bị đẩy sang ô thứ 2; queue 2 waypoint → active
+> `(89.70,89.70)` + queued `(94.70,94.70)` cho từng unit. `tsc --noEmit` sạch.
+>
+> **Verify (browser thật, 1280×577):** chuột phải với 2 dân chọn → đúng 1 `MOVE_UNITS`
+> `(162,95)`, server rải `161.70` / `162.30` cùng hàng; chọn 3 dân → khối 2×2 quanh
+> `(163,95)` (`162.70/163.30` × `94.70/95.30`), 2 dân tới trước về `IDLE`, không có
+> `ERROR_NOTIFICATION`, không lỗi console.
+
 ---
 
 ## CMD-03 — Context cursor
@@ -96,6 +123,46 @@ với `spacing ≈ 0.6` tile (đủ để ring không chồng).
 
 **File:** `apps/client/src/game/scenes/WorldScene.ts`
 
+> **DONE.**
+> - `resolveCursorMode(worldPoint)` mirror đúng thứ tự nhánh của `handleRightClickCommand`
+>   (placement → attack → harvest → move) và dùng **chung** hit-test helper, nên con trỏ
+>   không thể hứa một lệnh mà click sẽ không gửi.
+> - Tách `findUnitAt` / `findBuildingAt` / `findResourceAt` khỏi `handleRightClickCommand`
+>   (trước đây 3 vòng lặp hit-test nằm inline). `ownerFilter` nhận session id hoặc literal
+>   `'enemy'`, so sánh gom vào `ownerMatches` — tránh hai chỗ tự cài lại điều kiện owner.
+> - `CursorMode` = `default | attack | harvest | build-ok | build-blocked`, map sang CSS
+>   `default` / `crosshair` / `copy` / `copy` / `not-allowed`.
+> - Chỉ ghi CSS khi mode **thực sự đổi** (`appliedCursorCss` cache) — `handlePointerMove`
+>   chạy mỗi lần rê chuột, set cursor vô điều kiện là ~60 lần/giây ghi vào DOM.
+> - `refreshCursor()` gọi từ 3 nơi ngoài `handlePointerMove`: `notifySelectionChange`
+>   (đổi selection dưới con trỏ đứng yên — box-select, hotkey; lưu ý hàm này
+>   `return` sớm khi không có callback React nên phải refresh **trước** guard đó),
+>   `cancelBuildingPlacement` (thoát placement khi chuột không di chuyển), và cuối
+>   `handlePointerMove`. Vị trí chuột cuối lưu ở `lastPointerWorld`.
+> - Bỏ qua refresh khi `isDragSelecting`: đang kéo hộp chọn mà đổi cursor theo unit
+>   chạy qua bên dưới sẽ nhấp nháy vô nghĩa.
+> - Harvest chỉ hiện khi **toàn bộ** selection là villager (`selectionIsAllVillagers`);
+>   unit id đã despawn tính là "không phải villager" để giữ hướng an toàn.
+>
+> **Verify (browser thật, 1280×577, camera căn về TC):**
+> 1. không chọn gì, rê lên TC của mình → `default`;
+> 2. chọn 3 dân, rê lên cây → `copy`;
+> 3. vẫn 3 dân, rê ra đất trống → `default`;
+> 4. tạm đổi `mySessionId` để TC mình thành "địch", rê lên TC → `crosshair`;
+> 5. khôi phục owner, rê lại TC → `default`;
+> 6. selection có thêm 1 id không phải villager, rê lên cây → `default` (gate đúng);
+> 7. `setBuildingMode('HOUSE')`: trên footprint TC → `not-allowed`, ô trống → `copy`,
+>    `cancelBuildingPlacement()` khi chuột đứng yên → về `default`;
+> 8. 6 lần rê liên tiếp trong cùng mode → **0** lần gọi `setDefaultCursor` thêm (cache đúng);
+> 9. chuột đứng trên cây lúc chưa chọn (cursor `default`), chọn 2 dân **không di chuột**
+>    → `copy` (refresh từ `notifySelectionChange`);
+> 10. kéo hộp chọn qua cây → cursor giữ nguyên, không nhấp nháy.
+>
+> **Regression (refactor hit-test):** chuột phải cây → `HARVEST_RESOURCE`, đất trống →
+> `MOVE_UNITS (63,189)`, TC của mình → `MOVE_UNITS` (không attack), TC khi owner bị đổi
+> thành địch → `ATTACK_TARGET {targetType:'building'}`. 2 canvas, không overlay lỗi,
+> không lỗi console/runtime trong suốt lượt test. `tsc --noEmit` sạch.
+
 ---
 
 ## CMD-04 — Huỷ huấn luyện / huỷ móng nhà
@@ -115,6 +182,90 @@ với `spacing ≈ 0.6` tile (đủ để ring không chồng).
 - Client: chuột phải vào móng nhà của mình khi đang chọn → huỷ (hoặc phím `Delete`).
 
 **File:** shared types, `WorldRoom.ts`, `EntityDetails.tsx` / `WorldScene.ts`
+
+> **DONE.**
+> - **04a** `CANCEL_TRAIN` + `CancelTrainPayload { buildingId }`. Server lấy unit ở
+>   **đầu queue** (`trainingQueue[0]`) làm nguồn sự thật cho giá hoàn, nên client không
+>   thể chọn hoàn cái gì. Hoàn 100%, `trainingProgressMs = 0` — giữ lại thời gian đã
+>   trôi sẽ cho phép huỷ-rồi-xếp-lại để unit kế tiếp xong sớm hơn thời gian training.
+> - **04b** `CANCEL_BUILDING` + `CancelBuildingPayload { buildingId }`. Chỉ nhận
+>   `!isConstructed` (nhà đã xong bị từ chối: đây là "huỷ xây", không phải demolish).
+>   Hoàn 100% khi `constructionProgress < 10`, còn lại 50%; mỗi tài nguyên `Math.floor`
+>   riêng nên hoàn một phần không bao giờ làm tròn lên thành tài nguyên miễn phí.
+> - `refundResources(player, cost, ratio)` là helper dùng chung cho cả hai nhánh —
+>   trước đây mỗi chỗ tự cộng trừ 4 field một lần, thêm một nguồn hoàn tiền nữa là
+>   đủ để lệch nhau.
+> - Client: nút ✕ cạnh "Đang chờ: N" trong `EntityDetails` (04a); panel hiện
+>   "Đang xây dựng N%" + nút "Huỷ công trình (Delete)" khi chọn móng của mình (04b,
+>   dùng `SelectedEntityData.isConstructed/constructionProgress` mới thêm).
+> - Phím `Delete` bind trong `WorldScene.bindCancelKey` → `cancelSelectedFoundation()`,
+>   chỉ gửi khi không chọn unit nào, không ở placement mode, là móng **của mình**;
+>   nhà đã xong thì phím im lặng thay vì gửi lệnh mà server chắc chắn từ chối.
+> - Xoá building khỏi `state.buildings` là đủ: population chỉ đếm building đã xong,
+>   và unit đang đi tới/đánh móng tự bắt nhánh "target gone" ở tick sau.
+>
+> **Bug phát hiện khi test phím (đã sửa):** Phaser **re-emit `keydown-<KEY>` mỗi frame**
+> khi phím còn giữ xuống — đo được 18–40 lần emit cho một lần nhấn `Delete`
+> (`event.repeat` không bắt được, vì event re-emit không phải DOM repeat). Hậu quả:
+> một cú nhấn gửi hàng chục `CANCEL_BUILDING`, mỗi cái thừa bị server trả lỗi. Sửa bằng
+> debounce theo `performance.now()` (`CANCEL_KEY_DEBOUNCE_MS = 250`), vì guard kiểu cũ
+> (`event.repeat`) chỉ đúng với event do DOM phát.
+>
+> **Chưa phủ:** các binding cũ (`S`, `.`, `1..9`) cũng có thể bị nhân đôi bởi cùng cơ chế
+> (đo `keydown-S` = 2 emit/lần nhấn); đều là lệnh idempotent nên chưa gây lỗi, ghi vào
+> backlog để rà lại một lượt.
+>
+> **Verify (socket probe thật, 2 account):** train villager −50 food → `CANCEL_TRAIN`
+> → queue 0, `progress = 0`, food về đúng 300 (hoàn 100%); queue 2 unit, chờ 2.47 s
+> (progress 2469 ms) → huỷ unit đầu → unit còn lại spawn sau **5149 ms** kể từ lúc huỷ
+> (đúng 5 s, không phải phần còn lại của unit bị huỷ). Lỗi: queue rỗng → "Nothing is
+> being trained here", id lạ → "Building no longer exists", building người khác →
+> "Not your building" và queue của chủ nhân **không đổi**. Móng mới (progress 5.1%):
+> huỷ → hoàn đủ 50 wood. Móng ở 36.4%: huỷ → hoàn 25 wood (`floor(50 * 0.5)`). TC đã
+> xong → "Cannot cancel a completed building", TC còn nguyên; móng của account khác →
+> "Not your building", móng còn nguyên. Unit đang đi tới móng bị huỷ → móng mất, unit
+> còn sống và về `IDLE`.
+>
+> **Verify (browser thật, 1280×577):** UI train villager → panel hiện "Đang chờ: 1",
+> bấm ✕ → food 250 → 300, queue 0, dòng "Đang chờ" biến mất. Đặt House → panel hiện
+> "Đang xây dựng 12% | 90/450 HP" + nút "Huỷ công trình (Delete)", bấm nút → building và
+> sprite biến mất, wood 150 → 175 (hoàn 50% ở 12.6%), selection về null, panel về
+> placeholder. Giữ `Delete` ~450 ms trên móng 6.3% → **đúng 1** `CANCEL_BUILDING`, wood
+> 50 → 100 (hoàn đủ), móng + sprite biến mất. `Delete` trên TC đã xong → **0** message,
+> TC nguyên vẹn. `tsc --noEmit` sạch cả client và server, shared đã rebuild.
+>
+> **Pitfall test:** móng tự hoàn thành sau 5 s (rate demo), nên mọi thao tác
+> "đặt → chọn → huỷ" phải nằm trong một nhịp < 5 s; nếu không panel đã chuyển sang nhà
+> hoàn chỉnh và không còn nút huỷ. CDP `Input.dispatchMouseEvent` trong phiên này treo
+> liên tục (daemon timeout) sau vài chục lần dispatch — dùng `js()` set selection +
+> `Input.dispatchKeyEvent` để test phím, còn click UI thật đã phủ ở bước trước.
+>
+> **Review pass (sửa sau khi đọc lại diff):**
+> - `keydown-DELETE` **không bao giờ chạy trên macOS**: phím in chữ "delete" trên bàn phím
+>   Mac là `BACKSPACE`, `DELETE` chỉ có khi bấm `fn + delete`. Bind cả hai (`handleKey`
+>   dùng chung) — trước fix, phím quảng cáo trong help screen là phím chết trên chính
+>   máy dev.
+> - Đoạn kiểm tra "building tồn tại + đúng chủ" bị copy 3 lần (`CANCEL_TRAIN`,
+>   `CANCEL_BUILDING`, `SET_RALLY_POINT`) → gom vào `requireOwnedBuilding(client, id)`
+>   trả `BuildingState | null` và tự gửi lỗi. Thêm lệnh mới không thể quên một trong hai
+>   bước kiểm tra.
+> - `handleCancelTrain` tra blueprint **trước** `shift()`: bản cũ shift rồi mới tra, nên
+>   một entry không đọc được sẽ biến mất mà không hoàn tiền và không báo gì.
+> - `refundResources` clamp `ratio` ở 1 (`Math.min(1, ratio)`) — hoàn tiền không được phép
+>   sinh tài nguyên, kể cả khi caller sau này truyền số lớn hơn 1.
+>
+> **Verify (sau review):** socket probe 2 account — train rồi huỷ: food 250 → 300, queue 0,
+> progress 0; lỗi `Nothing is being trained here` / `Building no longer exists` /
+> `Not your building`; móng 4.1% → hoàn đủ 50 wood, móng 30.7% → hoàn 25; `CANCEL_BUILDING`
+> trên TC xong → `Cannot cancel a completed building`; móng của account khác vẫn còn sau khi
+> bị từ chối (`Not your building`); `SET_RALLY_POINT` qua helper mới vẫn set được
+> `rallyX/rallyY = 100` và vẫn từ chối House / building lạ / building người khác; train bình
+> thường vẫn xong sau 5 s. Browser (1280×577): đặt House rồi chọn, nhấn **Backspace** →
+> đúng 1 `CANCEL_BUILDING`, building + sprite biến mất, selection về null, wood 250 → 300
+> (hoàn đủ ở 8.1%); nhấn phím **Delete** (keyCode 46) → 1 message; bắn 4 `keyDown` liên tiếp
+> không `keyUp` (mô phỏng re-emit) → vẫn đúng 1 message (debounce giữ); Backspace trên TC đã
+> hoàn chỉnh → 0 message, TC nguyên; Backspace khi đang chọn unit → 0 message. 2 canvas,
+> không overlay lỗi, không lỗi console. `tsc --noEmit` sạch client + server.
 
 ---
 
@@ -169,6 +320,40 @@ nếu tìm được → gán `targetEntityId` mới và giữ `actionState = 'HA
 nếu không → `IDLE`.
 
 **File:** `apps/server/src/rooms/WorldRoom.ts`
+
+> **DONE.**
+> - `findNearestResource(unit, resourceType, radius)` + `retargetHarvest(unit)`; bán kính
+>   `HARVEST_RETARGET_RADIUS = 10` tile. Cận trên nên là **tile**, không phải px: 10 tile
+>   đủ bắc qua khoảng trống giữa hai cụm cây liền kề, mà không cho dân đi xuyên nửa bản đồ.
+> - Gọi ở **hai** chỗ: node vừa cạn (`remainingAmount <= 0`, xoá node rồi retarget) và nhánh
+>   `!resource` (node đã bị người khác dọn sạch trong lúc dân đang đi tới). Nhánh thứ hai
+>   trước đây là `IDLE` im lặng.
+> - Không có `ResourceType` trong payload lẫn `UnitState`, nên loại tài nguyên đang khai thác
+>   lưu ở `harvestTypeByUnit` (transient `Map<unitId, type>`). Set lúc `handleHarvestResource`,
+>   xoá khi `STOP_UNITS` / unit chết; **re-seed** từ node còn sống trong `processUnitHarvest`
+>   để đơn hàng khôi phục sau restart vẫn retarget được. Không đụng schema, không cần reset DB.
+> - Queue thắng retarget: `retargetHarvest` trả `false` khi `queueTargetX.length > 0`, nên
+>   lệnh Shift đã xếp vẫn được `resumeQueuedWaypoint` chạy tiếp thay vì bị lệnh tự động đè.
+> - Node `remainingAmount <= 0` bị loại khỏi tìm kiếm: có một tick node còn sót lại sau lần
+>   thu cuối trước khi `delete`, chọn nó sẽ đẩy dân vào node rỗng.
+>
+> **Verify (socket probe thật):** dân `u_2557` hái `res_2554 food@125,78 amt=150` → cạn sau
+> ~15.3 s → tự chuyển `res_2556` (d=1.41, cùng loại, gần nhất) → cạn sau ~15.2 s → chuyển
+> `res_2555` (d=2.00) → cạn → `IDLE` vì node food gần nhất còn lại ở d=16.16 > 10 (đúng cận
+> trên). Vị trí dân tiến dần 124.78,78.00 → 124.97,78.68 → 125.41,78.53 nên đây là đi bộ thật,
+> không phải đổi id suông.
+> Ba dân cùng đánh một node (`res_2577 amt=150`): node cạn ở +6.3 s, cả ba cùng retarget sang
+> `res_2575`, không dân nào về `IDLE`, không `ERROR_NOTIFICATION`.
+>
+> **Verify (browser thật):** dân `u_2589` hái `res_2586@168,133` (amt 150→0), client hiển thị
+> `targetEntityId` đổi sang `res_2588`, sprite dời 2234,9629 → 2182,9660 và vẫn `HARVESTING`
+> với `visible=true`; node biến khỏi `resourceNodes`. Reload lại → 2 canvas, scene sống, 1282
+> node, không overlay lỗi. `tsc --noEmit` sạch (server; client không đổi).
+>
+> **Chưa phủ:** nhánh `!resource` (node bị **người khác** dọn sạch khi dân đang đi tới) mới
+> được review code + typecheck, chưa dựng được kịch bản thật: dân spawn cùng cụm nên luôn tới
+> node trước khi nó cạn, và node chỉ cạn ở 10 máu/giây. Muốn test phải có hai account cùng đứng
+> cạnh một node — để backlog.
 
 ---
 

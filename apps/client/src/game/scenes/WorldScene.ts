@@ -55,6 +55,33 @@ const CONTROL_GROUP_RECALL_DOUBLE_MS = 300;
  */
 const DOUBLE_CLICK_SAME_TYPE_MS = 350;
 
+/**
+ * CMD-04b: minimum gap between two handled `Delete` presses, in milliseconds.
+ * Phaser re-emits `keydown-<KEY>` every frame while a key is held down, so this
+ * is what keeps one press to one command.
+ */
+const CANCEL_KEY_DEBOUNCE_MS = 250;
+
+/**
+ * CMD-03: what the pointer currently points at, in terms of the order a right
+ * click would issue. There are no AoE-style `.cur` assets yet, so each mode maps
+ * to a built-in CSS cursor - the browser renders them at any DPI without us
+ * shipping images.
+ */
+type CursorMode = 'default' | 'attack' | 'harvest' | 'build-ok' | 'build-blocked';
+
+const CURSOR_CSS: Record<CursorMode, string> = {
+  default: 'default',
+  // No sword asset: `crosshair` is the closest built-in that reads as "pick a
+  // target" instead of "click to move".
+  attack: 'crosshair',
+  // `copy` is the only built-in that reads as "carry this back", which is the
+  // harvest affordance without custom art.
+  harvest: 'copy',
+  'build-ok': 'copy',
+  'build-blocked': 'not-allowed'
+};
+
 export interface SelectedEntityData {
   id: string;
   type: 'unit' | 'building' | 'resource';
@@ -64,6 +91,9 @@ export interface SelectedEntityData {
   maxHp?: number;
   isOwner?: boolean;
   trainingQueue?: string[];
+  /** CMD-04b: foundations can be cancelled; finished buildings cannot. */
+  isConstructed?: boolean;
+  constructionProgress?: number;
   remainingAmount?: number;
   maxAmount?: number;
 }
@@ -94,6 +124,15 @@ export class WorldScene extends Phaser.Scene {
   // Cursor indicator
   private hoverTileHighlight!: Phaser.GameObjects.Image;
   private hoverGridCoord: { gridX: number; gridY: number } = { gridX: 0, gridY: 0 };
+
+  // CMD-03: last pointer position in world space, kept so the cursor can be
+  // recomputed when the selection or the input mode changes without the pointer
+  // moving (box-select under the cursor, hotkey-entered placement mode).
+  private lastPointerWorld: { x: number; y: number } | null = null;
+  private appliedCursorCss: string | null = null;
+
+  /** CMD-04b: timestamp of the last handled `Delete`, for key-repeat debounce. */
+  private lastCancelKeyAt = 0;
 
   // Building placement preview
   public buildingToPlace: BuildingType | null = null;
@@ -279,6 +318,7 @@ export class WorldScene extends Phaser.Scene {
       this.bindStopKey(this.input.keyboard);
       this.bindIdleCycleKeys(this.input.keyboard);
       this.bindHomeKey(this.input.keyboard);
+      this.bindCancelKey(this.input.keyboard);
       // Held-modifier state for the waypoint preview; not a hotkey.
       this.shiftKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
     }
@@ -806,6 +846,7 @@ export class WorldScene extends Phaser.Scene {
   private handlePointerMove(pointer: Phaser.Input.Pointer) {
     const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
     this.hoverGridCoord = screenToGrid(worldPoint.x, worldPoint.y);
+    this.lastPointerWorld = { x: worldPoint.x, y: worldPoint.y };
 
     // Snap highlight to grid tile
     const snappedScreen = gridToScreen(this.hoverGridCoord.gridX, this.hoverGridCoord.gridY);
@@ -862,6 +903,8 @@ export class WorldScene extends Phaser.Scene {
         height / this.cameras.main.zoom
       );
     }
+
+    this.refreshCursor();
   }
 
   private isPlacementValid(gx: number, gy: number, blueprint: any): boolean {
@@ -962,6 +1005,138 @@ export class WorldScene extends Phaser.Scene {
     const nx = (worldX - centerX) / radiusX;
     const ny = (worldY - centerY) / radiusY;
     return nx * nx + ny * ny <= 1;
+  }
+
+  /**
+   * Topmost unit of `ownerFilter` under the pointer. Shared by right-click
+   * targeting and the CMD-03 cursor so the two can never disagree about what the
+   * pointer is over.
+   */
+  private findUnitAt(worldPoint: { x: number; y: number }, ownerFilter?: string): string | null {
+    if (!this.room) return null;
+    let foundId: string | null = null;
+    let foundDepth = -Infinity;
+    this.room.state.units.forEach((unit: any, uId: string) => {
+      if (ownerFilter !== undefined && !this.ownerMatches(unit.ownerId, ownerFilter)) return;
+      const container = this.unitSprites.get(uId);
+      if (container && this.hitTestUnit(worldPoint.x, worldPoint.y, container) && container.depth > foundDepth) {
+        foundId = uId;
+        foundDepth = container.depth;
+      }
+    });
+    return foundId;
+  }
+
+  /**
+   * Building whose footprint contains `grid`. Ownership is the caller's filter:
+   * right-click attacks foreign buildings, the cursor only cares that one is there.
+   */
+  private findBuildingAt(grid: { gridX: number; gridY: number }, ownerFilter?: string): string | null {
+    if (!this.room) return null;
+    let foundId: string | null = null;
+    this.room.state.buildings.forEach((b: any, bId: string) => {
+      if (ownerFilter !== undefined && !this.ownerMatches(b.ownerId, ownerFilter)) return;
+      if (
+        grid.gridX >= b.gridX &&
+        grid.gridX < b.gridX + b.sizeX &&
+        grid.gridY >= b.gridY &&
+        grid.gridY < b.gridY + b.sizeY
+      ) {
+        foundId = bId;
+      }
+    });
+    return foundId;
+  }
+
+  /** Resource node under the pointer: sprite distance first, then exact grid cell. */
+  private findResourceAt(worldPoint: { x: number; y: number }, grid: { gridX: number; gridY: number }): string | null {
+    if (!this.room) return null;
+    let foundId: string | null = null;
+    this.room.state.resourceNodes.forEach((res: any, resId: string) => {
+      if (foundId) return;
+      const resSprite = this.resourceSprites.get(resId);
+      if (resSprite) {
+        const centerY = res.type === 'TREE' ? resSprite.y - 45 : resSprite.y - 18;
+        if (Math.hypot(worldPoint.x - resSprite.x, worldPoint.y - centerY) < 38) {
+          foundId = resId;
+        }
+      }
+      if (!foundId && res.gridX === grid.gridX && res.gridY === grid.gridY) {
+        foundId = resId;
+      }
+    });
+    return foundId;
+  }
+
+  /**
+   * CMD-03: what a right click at `worldPoint` would do right now. Mirrors the
+   * unit-order branches of `handleRightClickCommand` (placement, attack, harvest,
+   * move) using the same hit-tests, so the cursor can never promise an order that
+   * the click will not issue. The rally-point branch is not represented: it only
+   * applies with a building selected and no units, which resolves to `default`.
+   */
+  private resolveCursorMode(worldPoint: { x: number; y: number }): CursorMode {
+    const grid = screenToGrid(worldPoint.x, worldPoint.y);
+
+    if (this.buildingToPlace) {
+      const blueprint = BUILDING_BLUEPRINTS[this.buildingToPlace];
+      return this.isPlacementValid(grid.gridX, grid.gridY, blueprint) ? 'build-ok' : 'build-blocked';
+    }
+
+    if (!this.room || this.selectedUnitIds.size === 0) return 'default';
+
+    if (this.findUnitAt(worldPoint, 'enemy') || this.findBuildingAt(grid, 'enemy')) return 'attack';
+
+    if (this.selectionIsAllVillagers() && this.findResourceAt(worldPoint, grid)) return 'harvest';
+
+    return 'default';
+  }
+
+  /**
+   * Harvest is villager-only on the server, so the cursor must not advertise it
+   * for a mixed or military selection. Unknown ids (despawned units) count as
+   * "not a villager" to stay conservative.
+   */
+  private selectionIsAllVillagers(): boolean {
+    if (!this.room || this.selectedUnitIds.size === 0) return false;
+    for (const unitId of this.selectedUnitIds) {
+      const unit = this.room.state.units.get(unitId);
+      if (!unit || unit.type !== 'VILLAGER') return false;
+    }
+    return true;
+  }
+
+  /**
+   * Applies `mode` to the canvas. Phaser writes the CSS cursor, so re-asserting
+   * the same value every pointermove would touch the DOM ~60 times a second -
+   * the applied value is cached and only actual changes are written.
+   */
+  private setCursorMode(mode: CursorMode) {
+    const css = CURSOR_CSS[mode];
+    if (css === this.appliedCursorCss) return;
+    this.appliedCursorCss = css;
+    this.input.setDefaultCursor(css);
+  }
+
+  /**
+   * Recomputes the cursor from the most recent pointer position. Safe to call
+   * before the pointer has ever moved (nothing to resolve against) and while
+   * box-selecting (the drag rectangle is the feedback there, and switching the
+   * cursor mid-drag would flicker as units pass under it).
+   */
+  private refreshCursor() {
+    if (!this.lastPointerWorld) return;
+    if (this.isDragSelecting) return;
+    this.setCursorMode(this.resolveCursorMode(this.lastPointerWorld));
+  }
+
+  /**
+   * `findUnitAt`/`findBuildingAt` take an owner filter that is either a session
+   * id or the literal `'enemy'`. Resolving that here keeps both call sites from
+   * re-implementing the comparison.
+   */
+  private ownerMatches(ownerId: string, filter: string): boolean {
+    return filter === 'enemy' ? ownerId !== this.mySessionId : ownerId === filter;
   }
 
   private performSingleClickSelection(pointer: Phaser.Input.Pointer, additive = false, selectSameType = false) {
@@ -1270,6 +1445,61 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
+   * CMD-04b: `Delete` cancels the selected foundation.
+   *
+   * The unit selection owns `S` and `.`, so this only fires with no units
+   * selected. Ownership and completion are checked here before sending, because
+   * the server refuses both — claiming the keystroke for a command that cannot
+   * be executed would just look like the key is broken.
+   *
+   * Both key codes are bound because the key labelled "delete" on a Mac keyboard
+   * is BACKSPACE; binding only DELETE would make the advertised shortcut do
+   * nothing on macOS.
+   */
+  private bindCancelKey(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      if (this.buildingToPlace) return;
+      if (this.selectedUnitIds.size > 0) return;
+
+      // Phaser re-emits `keydown-<KEY>` for a key that stays down, so a held
+      // Delete would fire CANCEL_BUILDING dozens of times per second and the
+      // server would answer every extra one with an error. `event.repeat` does
+      // not catch that (the re-emitted event is not a DOM repeat), so the
+      // keystroke is debounced by time. 250 ms is below a deliberate double tap
+      // and well above the OS auto-repeat ramp.
+      const now = performance.now();
+      if (now - this.lastCancelKeyAt < CANCEL_KEY_DEBOUNCE_MS) return;
+
+      if (!this.cancelSelectedFoundation()) return;
+      this.lastCancelKeyAt = now;
+      event.preventDefault();
+    };
+
+    keyboard.on('keydown-DELETE', handleKey);
+    keyboard.on('keydown-BACKSPACE', handleKey);
+  }
+
+  /**
+   * Sends CANCEL_BUILDING for the selected building.
+   *
+   * @returns true when a command was actually sent, so the caller can swallow
+   * the key event only when it did something.
+   */
+  public cancelSelectedFoundation(): boolean {
+    if (!this.room || !this.selectedBuildingId) return false;
+
+    const building = this.room.state.buildings.get(this.selectedBuildingId);
+    if (!building) return false;
+    if (building.ownerId !== this.mySessionId) return false;
+    if (building.isConstructed) return false;
+
+    this.room.send(NetworkMessage.CANCEL_BUILDING, { buildingId: this.selectedBuildingId });
+    return true;
+  }
+
+  /**
    * CTL-04: `.` jumps to the next idle villager, `Ctrl + .` to the next idle
    * military unit. Selection follows the camera, so the jumped-to unit is ready
    * for an order without a second click.
@@ -1426,18 +1656,7 @@ export class WorldScene extends Phaser.Scene {
     const targetGrid = screenToGrid(worldPoint.x, worldPoint.y);
 
     // 1. Check if right-clicked on an enemy unit (shared hit-test with left-click)
-    let targetEnemyUnitId: string | null = null;
-    let targetEnemyUnitDepth = -Infinity;
-    this.room.state.units.forEach((unit: any, uId: string) => {
-      if (unit.ownerId !== this.mySessionId) {
-        const container = this.unitSprites.get(uId);
-        if (container && this.hitTestUnit(worldPoint.x, worldPoint.y, container) && container.depth > targetEnemyUnitDepth) {
-          targetEnemyUnitId = uId;
-          targetEnemyUnitDepth = container.depth;
-        }
-      }
-    });
-
+    const targetEnemyUnitId = this.findUnitAt(worldPoint, 'enemy');
     if (targetEnemyUnitId) {
       this.room.send(NetworkMessage.ATTACK_TARGET, {
         unitIds: Array.from(this.selectedUnitIds),
@@ -1449,20 +1668,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     // 2. Check if right-clicked on an enemy building
-    let targetEnemyBuildingId: string | null = null;
-    this.room.state.buildings.forEach((b: any, bId: string) => {
-      if (b.ownerId !== this.mySessionId) {
-        if (
-          targetGrid.gridX >= b.gridX &&
-          targetGrid.gridX < b.gridX + b.sizeX &&
-          targetGrid.gridY >= b.gridY &&
-          targetGrid.gridY < b.gridY + b.sizeY
-        ) {
-          targetEnemyBuildingId = bId;
-        }
-      }
-    });
-
+    const targetEnemyBuildingId = this.findBuildingAt(targetGrid, 'enemy');
     if (targetEnemyBuildingId) {
       this.room.send(NetworkMessage.ATTACK_TARGET, {
         unitIds: Array.from(this.selectedUnitIds),
@@ -1474,21 +1680,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     // 3. Check if right-clicked on a resource node (harvest command)
-    let targetResourceNodeId: string | null = null;
-    this.room.state.resourceNodes.forEach((res: any, resId: string) => {
-      if (targetResourceNodeId) return;
-      const resSprite = this.resourceSprites.get(resId);
-      if (resSprite) {
-        const centerY = res.type === 'TREE' ? resSprite.y - 45 : resSprite.y - 18;
-        if (Math.hypot(worldPoint.x - resSprite.x, worldPoint.y - centerY) < 38) {
-          targetResourceNodeId = resId;
-        }
-      }
-      if (!targetResourceNodeId && res.gridX === targetGrid.gridX && res.gridY === targetGrid.gridY) {
-        targetResourceNodeId = resId;
-      }
-    });
-
+    const targetResourceNodeId = this.findResourceAt(worldPoint, targetGrid);
     if (targetResourceNodeId) {
       this.room.send(NetworkMessage.HARVEST_RESOURCE, {
         unitIds: Array.from(this.selectedUnitIds),
@@ -1753,6 +1945,9 @@ export class WorldScene extends Phaser.Scene {
   public cancelBuildingPlacement() {
     this.buildingToPlace = null;
     this.placementGhost.setVisible(false);
+    // Placement owns the cursor while active, so leaving the mode has to restore
+    // it even though the pointer has not moved.
+    this.refreshCursor();
     if (this.onPlacementCancelled) {
       this.onPlacementCancelled();
     }
@@ -1787,6 +1982,10 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private notifySelectionChange() {
+    // Selection fingerprints the cursor (harvest needs an all-villager selection,
+    // attack needs units), so recompute even when no React callback is wired.
+    this.refreshCursor();
+
     if (!this.onSelectionChange) return;
 
     if (this.selectedUnitIds.size > 0) {
@@ -1818,7 +2017,9 @@ export class WorldScene extends Phaser.Scene {
           hp: b.hp,
           maxHp: b.maxHp,
           isOwner: b.ownerId === this.mySessionId,
-          trainingQueue: Array.from(b.trainingQueue)
+          trainingQueue: Array.from(b.trainingQueue),
+          isConstructed: b.isConstructed,
+          constructionProgress: b.constructionProgress
         });
         return;
       }

@@ -216,6 +216,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             <span className="text-amber-400 font-mono">Ctrl + .</span> nhảy tới lính đang rảnh,{' '}
             <span className="text-amber-400 font-mono">H</span> về Town Center
           </div>
+          <div>
+            <span className="text-amber-400 font-mono">Delete</span> /{' '}
+            <span className="text-amber-400 font-mono">Backspace</span> huỷ móng nhà đang chọn (hoàn
+            lại tài nguyên), <span className="text-amber-400 font-mono">✕</span> trong bảng chi tiết
+            huỷ đơn vị đang huấn luyện
+          </div>
         </div>
       </div>
     </div>

@@ -104,11 +104,11 @@ flowchart TD
 | CTL-06 | 1 | M | DONE |
 | CTL-07 | 1 | S | DONE |
 | CMD-01 | 2 | L | TODO |
-| CMD-02 | 2 | M | TODO |
-| CMD-03 | 2 | M | TODO |
-| CMD-04 | 2 | M | TODO |
+| CMD-02 | 2 | M | DONE |
+| CMD-03 | 2 | M | DONE |
+| CMD-04 | 2 | M | DONE |
 | CMD-05 | 2 | L | TODO |
-| CMD-06 | 2 | S | TODO |
+| CMD-06 | 2 | S | DONE |
 | SIM-01 | 3 | L | TODO |
 | SIM-02 | 3 | L | TODO |
 | SIM-03 | 3 | M | TODO |

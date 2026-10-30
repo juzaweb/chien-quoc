@@ -61,8 +61,19 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 - **Preview Shift không phản ánh `MAX_QUEUED_WAYPOINTS`** — quá 12 điểm thì server lặng lẽ
   bỏ nhưng client vẫn vẽ đường tới con trỏ, người chơi tưởng đã nhận. Cần hoặc gửi
   `ERROR_NOTIFICATION` (chỉ khi thực sự chạm trần), hoặc đổi màu/đứt nét phần preview.
-- **`WorldScene.ts` 2006 dòng, `WorldRoom.ts` 1274 dòng** — cả hai đã vượt mốc ~1000 dòng
-  và mỗi CTL lại thêm vào. Đề xuất tách trước khi làm CMD-*: input/selection
+- **Nhánh `!resource` của CMD-06 chưa có test thật** — dân đang đi tới node mà node bị
+  **người khác** dọn sạch thì phải retarget (đã code), nhưng chưa dựng được kịch bản: dân
+  spawn cùng cụm nên luôn tới node trước khi nó cạn (150 máu / 10 máu mỗi giây). Cần hai
+  account cùng đứng cạnh một node mới tái hiện được.
+- **Phaser re-emit `keydown-<KEY>` khi phím còn giữ** — đo được 18–40 emit cho một lần
+  nhấn `Delete`, 2 emit cho `keydown-S`; `event.repeat` không bắt được vì event re-emit
+  không phải DOM repeat. `bindCancelKey` đã tự debounce (`CANCEL_KEY_DEBOUNCE_MS`), nhưng
+  các binding cũ (`S`, `.`, `Ctrl/1..9`, `H`) chưa có guard tương đương. Hiện chưa gây lỗi
+  vì các lệnh đó idempotent (`STOP_UNITS`/select lại cùng unit thì kết quả như cũ), nhưng
+  nên rà một lượt: thêm một helper dùng chung (timestamp debounce hoặc
+  `Phaser.Input.Keyboard.JustDown` trên `Key` object) thay vì mỗi `bind*` tự xử lý.
+- **`WorldScene.ts` 2151 dòng, `WorldRoom.ts` 1409 dòng** — cả hai đã vượt mốc ~1000 dòng
+  và mỗi CTL/CMD lại thêm vào. Đề xuất tách trước khi làm CMD-01/CMD-05: input/selection
   (`WorldScene`), overlay/hotkey (`WorldScene`, đã chớm thành nhóm `bind*` + `update*`),
   và chia `WorldRoom` thành movement / combat / economy / commands. Không làm trong lúc
   đang mở diff CTL-02..07 để tránh trộn refactor với feature.

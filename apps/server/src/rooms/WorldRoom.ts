@@ -13,12 +13,15 @@ import {
   NetworkMessage,
   POPULATION_PER_HOUSE,
   PlaceBuildingPayload,
+  Resources,
   MoveUnitsPayload,
   TrainUnitPayload,
   AttackTargetPayload,
   HarvestResourcePayload,
   StopUnitsPayload,
   SetRallyPointPayload,
+  CancelTrainPayload,
+  CancelBuildingPayload,
   SERVER_TICK_RATE,
   UNIT_BLUEPRINTS,
   UnitBlueprint,
@@ -43,6 +46,54 @@ const PLAYER_COLORS = [
   '#84cc16'  // Lime
 ];
 
+/** Distance between formation cells, in tiles. Wide enough to keep rings apart. */
+const FORMATION_SPACING = 0.6;
+
+/**
+ * Search radius, in tiles, for the next resource node of the same type once a
+ * villager empties its current one (CMD-06). Ten tiles covers the gap between
+ * neighbouring forest patches without letting a villager cross the whole map.
+ */
+const HARVEST_RETARGET_RADIUS = 10;
+
+/**
+ * CMD-04b refund rule. AoE returns everything for a foundation that was only
+ * just placed and less once work has gone into it. These two constants keep the
+ * agreed numbers in one place instead of inline in the handler.
+ */
+const CANCEL_BUILDING_FULL_REFUND_BELOW = 10; // construction progress %
+const CANCEL_BUILDING_PARTIAL_REFUND_RATIO = 0.5;
+
+/**
+ * Lays a squad out as a centred square block around its destination.
+ *
+ * A previous 3-column layout turned a 60-unit army into a 3x20 column, which
+ * reads as a queue rather than a formation. The block is
+ * `ceil(sqrt(count))` cells wide, so the group's centre of mass lands on the
+ * clicked tile regardless of squad size.
+ *
+ * @param count Number of units to place. `0` yields an empty list.
+ * @param spacing Cell distance in tiles.
+ */
+function computeFormationOffsets(count: number, spacing: number): Array<{ x: number; y: number }> {
+  if (count <= 0) return [];
+
+  const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+  const rows = Math.ceil(count / cols);
+  const offsets: Array<{ x: number; y: number }> = [];
+
+  for (let idx = 0; idx < count; idx++) {
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    offsets.push({
+      x: (col - (cols - 1) / 2) * spacing,
+      y: (row - (rows - 1) / 2) * spacing
+    });
+  }
+
+  return offsets;
+}
+
 /**
  * Identity resolved by {@link WorldRoom.onAuth} and carried to `onJoin` as
  * `client.auth`. It holds the verified account, never client-supplied options.
@@ -57,6 +108,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private nextEntityId: number = 1000;
   private attackTimers: Map<string, number> = new Map();
   private harvestTimers: Map<string, number> = new Map();
+  /**
+   * Last resource type a villager was ordered to gather, keyed by unit id.
+   * Transient on purpose: after a server restart the map is empty, so
+   * `processUnitHarvest` re-seeds it from the live node instead of dying.
+   */
+  private harvestTypeByUnit: Map<string, string> = new Map();
   private readyPromise: Promise<void> | null = null;
   private worldRestoreError: Error | null = null;
 
@@ -95,6 +152,14 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     this.onMessage(NetworkMessage.SET_RALLY_POINT, (client, message: SetRallyPointPayload) => {
       this.handleSetRallyPoint(client, message);
+    });
+
+    this.onMessage(NetworkMessage.CANCEL_TRAIN, (client, message: CancelTrainPayload) => {
+      this.handleCancelTrain(client, message);
+    });
+
+    this.onMessage(NetworkMessage.CANCEL_BUILDING, (client, message: CancelBuildingPayload) => {
+      this.handleCancelBuilding(client, message);
     });
 
     // Run authoritative tick loop
@@ -720,36 +785,47 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     // payload can never sneak extra state into a unit.
     const queueWaypoint = payload.queue === true;
 
-    payload.unitIds.forEach((uId, idx) => {
+    // Validate first, then spread the surviving units over one formation. Doing
+    // it in a single pass would size the block off the payload length, so ids
+    // that are foreign or stale would leave holes in the shape.
+    const ownedUnits: UnitState[] = [];
+    const seen = new Set<string>();
+    payload.unitIds.forEach((uId) => {
+      // A repeated id would otherwise receive two orders and two offsets,
+      // leaving the same unit counted twice in the block.
+      if (seen.has(uId)) return;
+      seen.add(uId);
+
       const unit = this.state.units.get(uId);
-      if (unit && unit.ownerId === client.sessionId) {
-        // Form slight offset so units don't stack on exact same point
-        const offsetX = (idx % 3) * 0.5;
-        const offsetY = Math.floor(idx / 3) * 0.5;
+      if (unit && unit.ownerId === client.sessionId) ownedUnits.push(unit);
+    });
 
-        const targetX = Math.max(0, Math.min(MAP_GRID_WIDTH - 1, payload.targetGridX + offsetX));
-        const targetY = Math.max(0, Math.min(MAP_GRID_HEIGHT - 1, payload.targetGridY + offsetY));
+    const offsets = computeFormationOffsets(ownedUnits.length, FORMATION_SPACING);
 
-        if (queueWaypoint) {
-          if (unit.queueTargetX.length >= MAX_QUEUED_WAYPOINTS) return;
-          unit.queueTargetX.push(targetX);
-          unit.queueTargetY.push(targetY);
-          // A unit with no order in flight has nothing to finish, so the point
-          // it just asked for becomes the active order immediately.
-          if (unit.actionState === 'IDLE') {
-            this.advanceQueuedWaypoint(unit);
-          }
-          return;
+    ownedUnits.forEach((unit, idx) => {
+      const offset = offsets[idx];
+      const targetX = Math.max(0, Math.min(MAP_GRID_WIDTH - 1, payload.targetGridX + offset.x));
+      const targetY = Math.max(0, Math.min(MAP_GRID_HEIGHT - 1, payload.targetGridY + offset.y));
+
+      if (queueWaypoint) {
+        if (unit.queueTargetX.length >= MAX_QUEUED_WAYPOINTS) return;
+        unit.queueTargetX.push(targetX);
+        unit.queueTargetY.push(targetY);
+        // A unit with no order in flight has nothing to finish, so the point
+        // it just asked for becomes the active order immediately.
+        if (unit.actionState === 'IDLE') {
+          this.advanceQueuedWaypoint(unit);
         }
-
-        unit.queueTargetX.clear();
-        unit.queueTargetY.clear();
-        unit.targetX = targetX;
-        unit.targetY = targetY;
-        unit.actionState = 'MOVING';
-        unit.targetEntityId = '';
-        unit.targetEntityType = '';
+        return;
       }
+
+      unit.queueTargetX.clear();
+      unit.queueTargetY.clear();
+      unit.targetX = targetX;
+      unit.targetY = targetY;
+      unit.actionState = 'MOVING';
+      unit.targetEntityId = '';
+      unit.targetEntityType = '';
     });
   }
 
@@ -843,6 +919,116 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     building.trainingQueue.push(payload.unitType);
   }
 
+  /**
+   * CMD-04a: drops the unit at the head of a building's training queue.
+   *
+   * The queue is the source of truth for what was being trained, so the refund
+   * amount never comes from the client: only the head is cancelled and only its
+   * own blueprint price is returned. Cancelling refunds in full — nothing has
+   * been produced yet, the player only loses the elapsed time.
+   */
+  private handleCancelTrain(client: Client, payload: CancelTrainPayload) {
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+
+    const building = this.requireOwnedBuilding(client, payload.buildingId);
+    if (!building) return;
+
+    if (building.trainingQueue.length === 0) {
+      this.rejectCommand(client, 'Nothing is being trained here');
+      return;
+    }
+
+    // Resolve the price before touching the queue: an unreadable entry must not
+    // disappear without a refund, which is what a shift-then-lookup would do.
+    const unitType = building.trainingQueue[0] as UnitType;
+    const blueprint = UNIT_BLUEPRINTS[unitType];
+    if (!blueprint) {
+      this.rejectCommand(client, 'Unknown unit in training queue');
+      return;
+    }
+
+    building.trainingQueue.shift();
+    // The elapsed time belonged to the cancelled unit. Keeping it would let the
+    // player cancel and re-queue to finish the next unit for free.
+    building.trainingProgressMs = 0;
+    this.refundResources(player, blueprint.cost, 1);
+  }
+
+  /**
+   * CMD-04b: removes a foundation that was placed but never finished.
+   *
+   * Completed buildings are rejected: this is a "cancel the build", not a
+   * demolish command, and silently deleting a finished Town Center on a
+   * misclicked hotkey would be unrecoverable.
+   */
+  private handleCancelBuilding(client: Client, payload: CancelBuildingPayload) {
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+
+    const building = this.requireOwnedBuilding(client, payload.buildingId);
+    if (!building) return;
+
+    if (building.isConstructed) {
+      this.rejectCommand(client, 'Cannot cancel a completed building');
+      return;
+    }
+
+    const blueprint = BUILDING_BLUEPRINTS[building.type as BuildingType];
+    if (blueprint) {
+      // A foundation that has barely been worked on returns everything; once
+      // real progress went in, the player eats half the cost.
+      const ratio =
+        building.constructionProgress < CANCEL_BUILDING_FULL_REFUND_BELOW
+          ? 1
+          : CANCEL_BUILDING_PARTIAL_REFUND_RATIO;
+      this.refundResources(player, blueprint.cost, ratio);
+    }
+
+    // Units walking to or attacking the foundation resolve the missing target
+    // on their next tick, so nothing has to be repointed here.
+    this.state.buildings.delete(building.id);
+  }
+
+  /**
+   * Credits a fraction of a blueprint cost back to a player.
+   *
+   * Each resource is floored separately so a partial refund can never round up
+   * into free material. `ratio` is clamped at 1: a refund must never mint
+   * resources, whatever a future caller passes.
+   */
+  private refundResources(player: PlayerState, cost: Resources, ratio: number) {
+    if (!(ratio > 0)) return;
+
+    const share = Math.min(1, ratio);
+    player.wood += Math.floor(cost.wood * share);
+    player.food += Math.floor(cost.food * share);
+    player.gold += Math.floor(cost.gold * share);
+    player.stone += Math.floor(cost.stone * share);
+  }
+
+  /**
+   * Resolves a building the client is allowed to command, or rejects the command.
+   *
+   * Cancelling training, cancelling a foundation and setting a rally point all
+   * open with the same existence + ownership checks. Keeping them in one place
+   * means a new command cannot forget one and quietly accept a foreign id.
+   */
+  private requireOwnedBuilding(client: Client, buildingId: string): BuildingState | null {
+    if (!buildingId) return null;
+
+    const building = this.state.buildings.get(buildingId);
+    if (!building) {
+      this.rejectCommand(client, 'Building no longer exists');
+      return null;
+    }
+    if (building.ownerId !== client.sessionId) {
+      this.rejectCommand(client, 'Not your building');
+      return null;
+    }
+    return building;
+  }
+
   private handleAttackTarget(client: Client, payload: AttackTargetPayload) {
     if (!payload.unitIds || payload.unitIds.length === 0) return;
     if (payload.unitIds.length > MAX_SELECTION) {
@@ -910,6 +1096,9 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         unit.targetX = resource.gridX;
         unit.targetY = resource.gridY;
         unit.actionState = 'HARVESTING';
+        // Remember the type so a depleted node can hand the villager to the
+        // nearest node of the same kind instead of leaving it idle (CMD-06).
+        this.harvestTypeByUnit.set(unit.id, resource.resourceType);
       }
     });
   }
@@ -947,6 +1136,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       unit.targetY = unit.y;
       unit.queueTargetX.clear();
       unit.queueTargetY.clear();
+      this.harvestTypeByUnit.delete(unit.id);
     });
   }
 
@@ -963,17 +1153,9 @@ export class WorldRoom extends Room<{ state: WorldState }> {
    * can never keep.
    */
   private handleSetRallyPoint(client: Client, payload: SetRallyPointPayload) {
-    if (!payload?.buildingId) return;
+    const building = this.requireOwnedBuilding(client, payload?.buildingId);
+    if (!building) return;
 
-    const building = this.state.buildings.get(payload.buildingId);
-    if (!building) {
-      this.rejectCommand(client, 'Building no longer exists');
-      return;
-    }
-    if (building.ownerId !== client.sessionId) {
-      this.rejectCommand(client, 'Not your building');
-      return;
-    }
     if (!canTrainUnitsAt(building.type as BuildingType)) {
       this.rejectCommand(client, 'This building cannot train units');
       return;
@@ -1160,6 +1342,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
             if (targetUnit.hp <= 0) {
               const victimOwner = targetUnit.ownerId;
               this.state.units.delete(targetUnit.id);
+              // Transient harvest state must not outlive the unit.
+              this.harvestTypeByUnit.delete(targetUnit.id);
               this.updatePlayerPopulation(victimOwner);
               this.resumeQueuedWaypoint(unit);
             }
@@ -1195,11 +1379,71 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
   }
 
+  /**
+   * Finds the closest node of `resourceType` within `radius` tiles of the unit.
+   * Depleted nodes are skipped: a node can linger for a tick between its last
+   * harvest and the delete, and sending a villager there would strand it.
+   */
+  private findNearestResource(unit: UnitState, resourceType: string, radius: number): ResourceNodeState | null {
+    let nearest: ResourceNodeState | null = null;
+    let nearestDist = radius;
+
+    this.state.resourceNodes.forEach((node: ResourceNodeState) => {
+      if (node.resourceType !== resourceType || node.remainingAmount <= 0) return;
+      const dist = Math.hypot(node.gridX - unit.x, node.gridY - unit.y);
+      if (dist <= nearestDist) {
+        nearest = node;
+        nearestDist = dist;
+      }
+    });
+
+    return nearest;
+  }
+
+  /**
+   * Moves a villager onto the nearest node of the type it was already gathering
+   * (CMD-06). Without this the villager stood still as IDLE the moment its node
+   * ran dry, which in a forest meant it stopped for good a few tiles from the
+   * next tree.
+   *
+   * Only applies when the unit has no queued waypoints: those are explicit
+   * player orders and outrank an automatic retarget.
+   *
+   * @returns `true` when a new node was assigned.
+   */
+  private retargetHarvest(unit: UnitState): boolean {
+    if (unit.queueTargetX.length > 0) return false;
+
+    const resourceType = this.harvestTypeByUnit.get(unit.id);
+    if (!resourceType) return false;
+
+    const node = this.findNearestResource(unit, resourceType, HARVEST_RETARGET_RADIUS);
+    if (!node) return false;
+
+    unit.targetEntityId = node.id;
+    unit.targetEntityType = 'resource';
+    unit.targetX = node.gridX;
+    unit.targetY = node.gridY;
+    unit.actionState = 'HARVESTING';
+    return true;
+  }
+
   private processUnitHarvest(unit: UnitState, deltaTime: number) {
     const resource = this.state.resourceNodes.get(unit.targetEntityId);
     if (!resource) {
-      this.resumeQueuedWaypoint(unit);
+      // Another villager may have emptied this node while this one was walking
+      // to it. Retry a neighbour of the same type before giving up.
+      if (!this.retargetHarvest(unit)) {
+        this.harvestTypeByUnit.delete(unit.id);
+        this.resumeQueuedWaypoint(unit);
+      }
       return;
+    }
+
+    // Re-seed after a restart, where the order was restored but the transient
+    // map was not, so the unit can still retarget instead of stopping.
+    if (!this.harvestTypeByUnit.has(unit.id)) {
+      this.harvestTypeByUnit.set(unit.id, resource.resourceType);
     }
 
     const dist = Math.hypot(resource.gridX - unit.x, resource.gridY - unit.y);
@@ -1223,7 +1467,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
           if (resource.remainingAmount <= 0) {
             this.state.resourceNodes.delete(resource.id);
-            this.resumeQueuedWaypoint(unit);
+            // AoE behaviour: keep working by walking to the next node of the
+            // same type instead of standing idle next to an empty stump.
+            if (!this.retargetHarvest(unit)) {
+              this.harvestTypeByUnit.delete(unit.id);
+              this.resumeQueuedWaypoint(unit);
+            }
           }
         }
       }
