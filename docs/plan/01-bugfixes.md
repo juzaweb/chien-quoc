@@ -199,9 +199,41 @@ nhưng `update()` lại ghi đè bằng key cứng.
 
 ---
 
+## BUG-08 — StrictMode tạo 2 canvas Phaser, canvas chết đè canvas sống
+
+**Hiện tượng:** sau khi hot-reload hoặc mở game, DOM có **2 canvas Phaser** cùng kích thước.
+Canvas sống bị đẩy xuống `top: 548` (dưới canvas chết `top: 0`), click vào vùng nhìn thấy
+không tới được game. `document.querySelector('canvas')` trả về canvas chết.
+
+**Nguyên nhân:** React StrictMode mount → unmount → mount lại trong cùng một tick.
+
+`apps/client/src/game/PhaserGame.tsx` tạo `new Phaser.Game(config)` **đồng bộ**.
+Boot của Phaser là bất đồng bộ, nên với lần mount bị throwaway:
+1. `new Phaser.Game()` chạy, bắt đầu boot.
+2. Cleanup chạy ngay: `game.destroy(true)` — nhưng Game chưa boot xong nên canvas chưa tồn tại.
+3. Boot hoàn tất **sau** cleanup → canvas được append vào container và không ai xoá.
+
+Kết quả: 1 canvas mồ côi + 1 canvas thật.
+
+**Hướng sửa:**
+1. Hoãn `new Phaser.Game()` bằng `setTimeout(..., 0)` — lần mount throwaway bị huỷ trước khi
+   bất kỳ Game nào tồn tại.
+2. Cờ `disposed`: nếu cleanup chạy trong lúc đang boot, `ready` handler tự destroy.
+3. Cleanup: nếu `game.isBooted` thì destroy ngay; nếu chưa thì đăng ký `once('ready')` để destroy.
+4. Dọn lần cuối: `container.querySelectorAll('canvas').forEach(c => c.remove())`.
+
+**File:** `apps/client/src/game/PhaserGame.tsx`
+**Cách kiểm:** reload 3 lần, mỗi lần `document.querySelectorAll('canvas')` chỉ có 1 canvas
+game (kích thước > 200px) tại `top: 0`; chọn quân và ra lệnh vẫn hoạt động.
+
+> **DONE.** Verify 3/3 lần reload: `gameCanvases = 1`, `tops = [0]`, scene booted với
+> 39 unit / 14 building, room đã bind, chọn quân cập nhật đúng panel. Console 0 error.
+
+---
+
 ## Thứ tự làm
 
-`BUG-02` ✅ → `BUG-07` ✅ → `BUG-03` ✅ → `BUG-04` ✅ → `BUG-05` ✅ → `BUG-01a` ✅ → `BUG-01b` ✅ → `BUG-06` ✅
+`BUG-02` ✅ → `BUG-07` ✅ → `BUG-03` ✅ → `BUG-04` ✅ → `BUG-05` ✅ → `BUG-01a` ✅ → `BUG-01b` ✅ → `BUG-06` ✅ → `BUG-08` ✅
 
 Phase 0 hoàn tất. Tiếp theo: Phase 1 (`CTL-01`).
 

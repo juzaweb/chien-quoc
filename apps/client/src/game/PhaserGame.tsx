@@ -29,11 +29,12 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
   roomRef.current = room;
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    const container = containerRef.current;
+    if (!container) return;
 
     const config: Phaser.Types.Core.GameConfig = {
       type: Phaser.AUTO,
-      parent: containerRef.current,
+      parent: container,
       width: window.innerWidth,
       height: window.innerHeight,
       backgroundColor: '#0a0f1d',
@@ -46,22 +47,50 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
       scene: [WorldScene]
     };
 
-    const game = new Phaser.Game(config);
-    gameRef.current = game;
+    let disposed = false;
+    let bootTimer = 0;
 
-    game.events.once('ready', () => {
-      const scene = game.scene.getScene('WorldScene') as WorldScene;
-      sceneRef.current = scene;
-      scene.onSelectionChange = onSelectionChange;
-      scene.onPlacementCancelled = onPlacementCancelled;
+    const destroyGame = (game: Phaser.Game) => {
+      if (gameRef.current === game) gameRef.current = null;
+      // `true` removes the canvas Phaser attached to the container.
+      try {
+        game.destroy(true);
+      } catch {
+        // Already torn down; nothing to do.
+      }
+    };
 
-      if (playerNameRef.current) {
-        scene.setPlayerName(playerNameRef.current);
-      }
-      if (roomRef.current) {
-        scene.setRoom(roomRef.current);
-      }
-    });
+    // React StrictMode mounts, unmounts and remounts the component in the same
+    // tick. Constructing Phaser.Game synchronously would start an async boot
+    // whose canvas lands in the DOM after cleanup already ran, leaving a second,
+    // orphaned canvas stacked below the live one. Deferring by a tick means the
+    // throwaway mount is cancelled before any Game exists.
+    bootTimer = window.setTimeout(() => {
+      if (disposed) return;
+
+      const game = new Phaser.Game(config);
+      gameRef.current = game;
+
+      game.events.once('ready', () => {
+        // The component unmounted while Phaser was still booting.
+        if (disposed) {
+          destroyGame(game);
+          return;
+        }
+
+        const scene = game.scene.getScene('WorldScene') as WorldScene;
+        sceneRef.current = scene;
+        scene.onSelectionChange = onSelectionChange;
+        scene.onPlacementCancelled = onPlacementCancelled;
+
+        if (playerNameRef.current) {
+          scene.setPlayerName(playerNameRef.current);
+        }
+        if (roomRef.current) {
+          scene.setRoom(roomRef.current);
+        }
+      });
+    }, 0);
 
     const handleResize = () => {
       if (gameRef.current) {
@@ -71,12 +100,24 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
     window.addEventListener('resize', handleResize);
 
     return () => {
+      disposed = true;
+      window.clearTimeout(bootTimer);
       window.removeEventListener('resize', handleResize);
       sceneRef.current = null;
-      if (gameRef.current) {
-        gameRef.current.destroy(true);
-        gameRef.current = null;
+
+      const game = gameRef.current;
+      if (game) {
+        if (game.isBooted) {
+          destroyGame(game);
+        } else {
+          // Boot still in flight: destroy once it finishes, otherwise its canvas
+          // is appended after this cleanup has already run.
+          game.events.once('ready', () => destroyGame(game));
+        }
       }
+
+      // Belt and braces: drop anything Phaser may have already attached.
+      container.querySelectorAll('canvas').forEach((canvas) => canvas.remove());
     };
   }, []);
 
