@@ -38,6 +38,16 @@ const PLAYER_COLORS = [
   '#84cc16'  // Lime
 ];
 
+/**
+ * Identity resolved by {@link WorldRoom.onAuth} and carried to `onJoin` as
+ * `client.auth`. It holds the verified account, never client-supplied options.
+ */
+interface WorldRoomAuth {
+  userId: string;
+  username: string;
+  displayName: string;
+}
+
 export class WorldRoom extends Room<{ state: WorldState }> {
   private nextEntityId: number = 1000;
   private attackTimers: Map<string, number> = new Map();
@@ -356,11 +366,18 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   /**
-   * Rejects anonymous connections: a valid account token is required before a
-   * seat is reserved, so `onJoin` can trust the identity it receives.
+   * Rejects anonymous connections before a seat is reserved.
+   *
+   * This must be `static`: `matchMaker` only calls the static hook during
+   * matchmaking (see `callOnAuth` in `@colyseus/core`). An instance method is
+   * skipped there, which would let an unauthenticated caller reserve seats via
+   * `POST /matchmake/joinOrCreate/world_room`. The returned object becomes
+   * `client.auth`, so `onJoin` can trust the identity it receives.
+   *
+   * @param token Bearer token forwarded from the matchmaking request headers.
    */
-  onAuth(client: Client, options: any, context: { token?: string }) {
-    const payload = AuthService.verifyToken(context?.token);
+  static async onAuth(token: string | undefined): Promise<WorldRoomAuth> {
+    const payload = AuthService.verifyToken(token);
     if (!payload) {
       // AUTH_FAILED (525) is the canonical matchmaking code; the client checks
       // the code, not the message, to decide whether to clear the stored token.
@@ -379,7 +396,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     // token, so the account name is the only ownership key. There is deliberately
     // no fallback to `options.playerName`: a client-supplied name would let a
     // player join as somebody else's empire.
-    const authUser = client.auth as { displayName?: string } | undefined;
+    const authUser = client.auth as Partial<WorldRoomAuth> | undefined;
     if (!authUser?.displayName) {
       throw new Error('Cannot join without an authenticated account.');
     }
