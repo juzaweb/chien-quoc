@@ -113,6 +113,17 @@ ghost vẫn hiện, người chơi tưởng game lag.
 
 **File:** `apps/client/src/game/scenes/WorldScene.ts`
 
+> **DONE.** `commitBuildingPlacement` gọi `showCommandFeedback(..., 0xef4444)` tại tâm ô ghost,
+> dùng **đúng công thức** mà `handlePointerMove` dùng để đặt ghost
+> (`gridToScreen(gx + sizeX / 2 - 0.5, gy + sizeY / 2 - 0.5)`) — vòng đỏ vì thế rơi đúng
+> chỗ người chơi vừa click thay vì lệch sang ô cạnh bên.
+> Nhánh hợp lệ gửi `PLACE_BUILDING` rồi `return` sớm; nhánh sai không đụng `buildingToPlace`,
+> nên ghost vẫn hiện và đã tint đỏ (`0xfca5a5`) từ trước đó — thử ô khác được ngay.
+>
+> **Ca còn lại của cùng lớp "im lặng":** đặt nhà khi thiếu tài nguyên thì client **không**
+> kiểm tra, nhưng server luôn trả `ERROR_NOTIFICATION` (`WorldRoom.handlePlaceBuilding`),
+> và `App.tsx` đã bind message đó thành toast 3.5s → không còn silent-fail, khỏi sửa client.
+
 ---
 
 ## BUG-05 — `hoverGridCoord` cũ khi click không qua `pointermove`
