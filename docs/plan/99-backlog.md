@@ -4,8 +4,7 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 
 ## Điều khiển
 
-- **Edge scrolling** — di chuột vào mép màn hình để pan camera.
-- **Kéo camera bằng chuột giữa** (middle-drag pan).
+- **Kéo camera bằng chuột giữa** (middle-drag pan). — *edge scroll đã chuyển sang `BUG-01b`*
 - **Alt + chuột phải** — giữ đội hình khi di chuyển.
 - **Bookmark camera** (`Ctrl+F2..F4` lưu, `F2..F4` gọi) — AoE2 hotkey mặc định.
 - **Space** — nhảy tới sự kiện gần nhất (báo động, tấn công).

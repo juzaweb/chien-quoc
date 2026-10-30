@@ -13,14 +13,30 @@ Làm hết phase này trước khi thêm feature, vì Phase 1–2 sẽ dựa tr�
 - `apps/client/src/App.tsx` → `handleKeyDown`: `'w'` → `handleSelectBuilding('BARRACKS')`
 - `apps/client/src/game/scenes/WorldScene.ts` → `wasdKeys` (W/A/S/D) + `update()` pan camera
 
-**Hướng sửa (chọn 1, ghi vào PR):**
-- (A) Bỏ `WASD` pan, chuyển sang **mũi tên + edge scroll** (đúng AoE2). Giữ `Q/W/E/R/T` cho build.
-- (B) Giữ `WASD`, đổi hotkey build sang dãy khác (vd `Z/X/C/V/B`).
+> **ĐÃ CHỐT: phương án (A)** — bỏ `WASD` pan, giữ `Q/W/E/R/T` cho build,
+> pan bằng **mũi tên + edge scroll**.
+> Hệ quả tích cực: `A`, `P`, `S` trở thành phím trống dùng được cho
+> Attack-move (`CMD-01`) và Stop (`CTL-03`).
 
-> **Cần xác nhận với user trước khi làm.** Plan giả định chọn (A).
+### BUG-01a — Bỏ WASD pan
+1. Xoá khối `this.wasdKeys = this.input.keyboard.addKeys({up: W, left: A, down: S, right: D})`
+   trong `create()` và field `wasdKeys`.
+2. Xoá 4 nhánh `this.wasdKeys.*.isDown` trong `update()`, chỉ còn `this.cursors.*`.
+3. Xoá `apps/client/src/App.tsx` cũng không cần đổi — hotkey build giữ nguyên.
+4. Kiểm tra: bấm `W` → chỉ mở Barracks, camera đứng yên.
 
-**File:** `apps/client/src/game/scenes/WorldScene.ts`, `apps/client/src/App.tsx`
-**Cách kiểm:** bấm `W` → chỉ mở Barracks, camera đứng yên. Bấm mũi tên → camera pan.
+### BUG-01b — Edge scrolling (bắt buộc, bù cho WASD)
+Không có edge scroll thì bỏ WASD sẽ khiến pan rất khó chịu, nên làm ngay trong task này.
+
+1. Trong `update()`, đọc `this.input.activePointer` (toạ độ màn hình, không bị ảnh hưởng camera).
+2. Vùng biên `EDGE_SIZE = 24` px (nên scale theo DPR nếu cần).
+3. Nếu `pointer.x < EDGE_SIZE` → `scrollX -= cameraSpeed` … tương tự 4 cạnh, có thể chéo góc.
+4. **Không** edge-scroll khi con trỏ đang ở ngoài canvas (vd đang hover HUD React) —
+   kiểm tra `pointer.x >= 0 && pointer.y >= 0 && x <= width && y <= height`.
+5. Có thể thêm hằng `EDGE_SCROLL_ENABLED` để tắt khi test.
+
+**File:** `apps/client/src/game/scenes/WorldScene.ts`
+**Cách kiểm:** để chuột ở mép trái màn hình → camera pan sang trái; bấm `W` → chỉ mở Barracks.
 
 ---
 
@@ -137,6 +153,6 @@ nhưng `update()` lại ghi đè bằng key cứng.
 
 ## Thứ tự làm
 
-`BUG-02` → `BUG-07` → `BUG-03` → `BUG-04` → `BUG-05` → `BUG-01` → `BUG-06`
+`BUG-02` → `BUG-07` → `BUG-03` → `BUG-04` → `BUG-05` → `BUG-01a` → `BUG-01b` → `BUG-06`
 
 (Bug phía client gom một lượt cho dễ test, `BUG-06` cần sửa shared nên tách commit.)

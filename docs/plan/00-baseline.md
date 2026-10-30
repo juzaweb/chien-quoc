@@ -34,7 +34,7 @@ Cập nhật file này mỗi khi một phase hoàn thành.
 
 | Key | Hành vi |
 | --- | --- |
-| `WASD` / mũi tên | pan camera (`WorldScene.update`) |
+| `WASD` / mũi tên | pan camera (`WorldScene.update`) — **WASD sẽ bị bỏ ở `BUG-01a`** |
 | `Q` `W` `E` `R` `T` | chọn đặt công trình (`App.tsx`) |
 | `Esc` | huỷ đặt nhà, hoặc clear selection |
 

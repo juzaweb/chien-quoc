@@ -55,10 +55,16 @@
 
 ## CTL-03 — Lệnh Stop (phím `S`)
 
-**Mục tiêu:** dừng mọi hành động hiện tại của quân đang chọn.
+**Stop là gì (làm rõ):** nút Stop trong AoE2 **không phải** "dừng game" hay "pause".
+Nó = **huỷ lệnh hiện tại của quân đang chọn và đứng yên tại chỗ**.
 
-**Vì sao cần:** hiện không có cách nào bảo lính đang đánh/đang khai thác dừng lại,
-phải ra lệnh move — sai chuẩn.
+Ví dụ thực tế:
+- Dân đang chặt cây → bấm `S` → dân đứng yên ngay giữa rừng (không quay về, không đi đâu).
+- Lính đang đuổi địch → bấm `S` → lính đứng yên (dùng để rút lui có kiểm soát).
+- Không có Stop thì cách duy nhất để ngừng là ra lệnh **move**, mà move thì **phải di chuyển**
+  → không thể đứng yên tại chỗ.
+
+Hoàn toàn độc lập với việc game online hay offline; đây là lệnh trong game.
 
 **Protocol:**
 ```ts
@@ -69,12 +75,14 @@ export interface StopUnitsPayload { unitIds: string[]; }
 
 **Server** — `handleStopUnits`: với mỗi unit thuộc client → `actionState = 'IDLE'`,
 `targetEntityId = ''`, `targetEntityType = ''`, `targetX = unit.x`, `targetY = unit.y`,
-và xoá `attackTimers` / `harvestTimers` của unit đó.
+xoá `attackTimers` / `harvestTimers` của unit đó, và (nếu đã có `CTL-05`) xoá luôn
+`queueTargetX/Y` để Shift-queue cũng bị huỷ.
 
-**Client** — bind `S` (không kèm Ctrl) → gửi `STOP_UNITS` với `selectedUnitIds`.
+**Client** — bind `S` (không kèm Ctrl/Shift) trong `create()` → gửi `STOP_UNITS`
+với `selectedUnitIds`.
 
-**Lưu ý:** phím `S` hiện đang là pan camera xuống (WASD). Nếu Phase 0 chọn (A) — bỏ WASD —
-thì `S` trống. Nếu vẫn giữ WASD thì đổi Stop sang phím khác, **phải xác nhận với user**.
+**Điều kiện:** phím `S` chỉ trống sau khi `BUG-01a` đã bỏ WASD. Nếu làm CTL-03 trước BUG-01a,
+tạm dùng `Delete` rồi đổi lại.
 
 **File:** shared types, `WorldRoom.ts`, `WorldScene.ts`
 

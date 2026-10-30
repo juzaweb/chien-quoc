@@ -120,7 +120,7 @@ với `spacing ≈ 0.6` tile (đủ để ring không chồng).
 
 ## CMD-05 — Nông dân xây nhà (thay vì tự mọc)
 
-**Đây là thay đổi gameplay lớn, cần user xác nhận trước khi làm.**
+> **ĐÃ CHỐT: LÀM.** Thay đổi gameplay có chủ đích, đưa kinh tế về đúng chuẩn AoE.
 
 **Hiện trạng:** `PLACE_BUILDING` trừ tài nguyên → `update()` cộng
 `constructionProgress += dt * 100 / 5` → nhà tự hoàn thành sau 5s, bất kể có dân hay không.
@@ -152,6 +152,7 @@ với `spacing ≈ 0.6` tile (đủ để ring không chồng).
 - Animation `villager_harvest` dùng lại cho `BUILDING`, hoặc thêm `villager_build`.
 
 **Breaking:** đổi `BUILDING_BLUEPRINTS.*.buildTimeMs` sẽ ảnh hưởng cân bằng — review riêng.
+**Breaking:** thêm `builderUnitIds` vào schema → reset `apps/server/database/dev.db`.
 
 **File:** shared types, `BuildingState.ts`, `UnitState.ts`, `WorldRoom.ts`, `WorldScene.ts`
 

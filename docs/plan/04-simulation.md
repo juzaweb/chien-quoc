@@ -35,6 +35,8 @@ Nếu > 5ms, phải giới hạn số path tính mỗi tick (hàng đợi, tối
 
 ## SIM-02 — Drop-off & carry capacity
 
+> **ĐÃ CHỐT: LÀM.** Đi kèm CMD-05 để kinh tế về đúng chuẩn AoE.
+
 **Vấn đề:** `processUnitHarvest` cộng thẳng tài nguyên vào `player` mỗi 1s.
 AoE bắt dân mang về TC / Lumber Camp / Mining Camp rồi mới cộng.
 
@@ -54,7 +56,11 @@ nhưng **chưa được dùng ở đâu**.
 4. Server `update()` xử lý `RETURNING`: tìm building drop-off gần nhất thuộc cùng owner.
 5. Client: hiện icon tài nguyên nhỏ trên đầu dân đang mang (tuỳ chọn).
 
-**Lưu ý cân bằng:** sẽ làm chậm kinh tế đáng kể. Cần user xác nhận trước.
+**Lưu ý cân bằng:** sẽ làm chậm kinh tế đáng kể — cố ý, để đúng chuẩn. Có thể tinh chỉnh
+`carryCapacity` và `gatherRate` để không quá chậm.
+
+**Breaking:** thêm `carryCapacity` vào blueprint (không ảnh hưởng DB) +
+`actionState` mới `'RETURNING'` (string, không cần reset DB).
 
 **File:** shared constants + types, `WorldRoom.ts`, `WorldScene.ts` (icon tuỳ chọn)
 
@@ -106,4 +112,6 @@ forces", nhưng `update()` **không** xử lý building combat. Tower chỉ là 
 ## Thứ tự làm
 
 `SIM-03` (nhỏ, độc lập) → `SIM-04` (setup test trước khi refactor lớn) →
-`SIM-01` (pathfinding) → `SIM-02` (drop-off, cần xác nhận user).
+`SIM-01` (pathfinding) → `SIM-02` (drop-off).
+
+`SIM-02` phụ thuộc `CMD-05` + `SIM-01`: dân phải tìm đường về nhà, nên pathfinding làm trước.

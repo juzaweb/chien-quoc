@@ -20,12 +20,21 @@ theo từng bước nhỏ, mỗi bước là một thay đổi độc lập có 
 4. Trước khi đánh dấu xong: `tsc --noEmit` cho cả `apps/server` và `apps/client`.
 5. Không commit/push khi chưa được phép. Commit message bằng tiếng Anh.
 
+## Quyết định đã chốt
+
+| # | Câu hỏi | Quyết định |
+| --- | --- | --- |
+| 1 | Xung đột `W` (pan vs build) | **Bỏ WASD pan**, giữ `Q/W/E/R/T` build, pan bằng mũi tên + edge scroll (`BUG-01a`, `BUG-01b`) |
+| 2 | Có cần lệnh Stop? | **Có** — nhưng hạ ưu tiên xuống cuối Phase 1, và làm rõ Stop = huỷ lệnh + đứng yên (`CTL-03`) |
+| 3 | Dân xây nhà + mang tài nguyên về? | **Có** — đưa kinh tế về chuẩn AoE (`CMD-05`, `SIM-02`) |
+
 ## Thứ tự phụ thuộc
 
 ```mermaid
 flowchart TD
   subgraph P0["Phase 0 — Bugfix (làm trước, không thêm feature)"]
-    B01[BUG-01 hotkey W xung đột]
+    B01a[BUG-01a bỏ WASD pan]
+    B01b[BUG-01b edge scroll]
     B02[BUG-02 hit-test lệch]
     B03[BUG-03 drag threshold theo zoom]
     B04[BUG-04 placement fail im lặng]
@@ -60,16 +69,17 @@ flowchart TD
     S04[SIM-04 tests]
   end
 
-  B01 --> C01
+  B01a --> B01b
+  B01a --> C03
   B02 --> C02
   B05 --> D03
   B06 --> C03
   C03 --> C05
-  C03 --> D01
   C05 --> D01
   C06 --> D05
   B04 --> D04
-  D05 --> S01
+  D05 --> S02
+  S01 --> S02
   D06 --> S02
 ```
 
@@ -77,7 +87,8 @@ flowchart TD
 
 | Task | Phase | Size | Status |
 | --- | --- | --- | --- |
-| BUG-01 | 0 | S | TODO |
+| BUG-01a | 0 | S | TODO |
+| BUG-01b | 0 | S | TODO |
 | BUG-02 | 0 | S | TODO |
 | BUG-03 | 0 | S | TODO |
 | BUG-04 | 0 | S | TODO |
