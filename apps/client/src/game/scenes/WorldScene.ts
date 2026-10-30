@@ -38,6 +38,15 @@ const CLICK_DRAG_MIN_SCREEN_PX = 6;
  */
 const EDGE_SCROLL_SIZE_PX = 24;
 
+/**
+ * Phaser emits `keydown-<NAME>` for every mapped keyCode, so these need no
+ * `addKey`/`addCapture` registration. Top-row digits only (AoE2 convention).
+ */
+const CONTROL_GROUP_KEYS = ['ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'];
+
+/** Second press within this window re-centres the camera on the group. */
+const CONTROL_GROUP_RECALL_DOUBLE_MS = 300;
+
 export interface SelectedEntityData {
   id: string;
   type: 'unit' | 'building' | 'resource';
@@ -87,6 +96,10 @@ export class WorldScene extends Phaser.Scene {
   public selectedUnitIds: Set<string> = new Set();
   public selectedBuildingId: string | null = null;
   public selectedResourceId: string | null = null;
+
+  // Control groups (CTL-01): Ctrl+1..9 assigns the current selection, 1..9 recalls it.
+  private controlGroups: Map<number, Set<string>> = new Map();
+  private lastGroupRecall: { index: number; at: number } = { index: 0, at: 0 };
   private hasCenteredOnSpawn: boolean = false;
   private centerAttempts: number = 0;
 
@@ -219,6 +232,7 @@ export class WorldScene extends Phaser.Scene {
       this.cursors = this.input.keyboard.createCursorKeys();
       // WASD is intentionally NOT bound: it collides with the Q/W/E/R/T build
       // hotkeys in App.tsx. Panning is arrows + edge scroll (see update()).
+      this.bindControlGroupKeys(this.input.keyboard);
     }
 
     // Initial camera position centered on map - normal 1.0 zoom
@@ -381,6 +395,7 @@ export class WorldScene extends Phaser.Scene {
         this.unitSprites.delete(key);
       }
       this.unitTargetPositions.delete(key);
+      this.controlGroups.forEach((ids) => ids.delete(key));
       if (this.selectedUnitIds.has(key)) {
         this.selectedUnitIds.delete(key);
         this.notifySelectionChange();
@@ -1015,6 +1030,67 @@ export class WorldScene extends Phaser.Scene {
 
     this.selectedBuildingId = null;
     this.selectedResourceId = null;
+  }
+
+  private bindControlGroupKeys(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    CONTROL_GROUP_KEYS.forEach((name, i) => {
+      const index = i + 1;
+      keyboard.on(`keydown-${name}`, (event: KeyboardEvent) => {
+        if (event.ctrlKey || event.metaKey) {
+          // Ctrl/Cmd + digit is a browser tab shortcut, and Phaser deliberately
+          // skips its own preventDefault for keys pressed with a modifier - so
+          // the tab would switch instead of the group being assigned.
+          event.preventDefault();
+          this.groupControlGroup(index);
+        } else {
+          this.recallControlGroup(index);
+        }
+      });
+    });
+  }
+
+  private groupControlGroup(index: number) {
+    const ids = new Set<string>();
+    this.selectedUnitIds.forEach((unitId) => {
+      const unit = this.room?.state.units.get(unitId);
+      // Left-click selection ignores ownership, so filter here - otherwise a
+      // misclicked enemy unit would follow us into the group and take orders.
+      if (unit && unit.ownerId === this.mySessionId) ids.add(unitId);
+    });
+    // Assigning with nothing selected empties the group, like AoE2.
+    this.controlGroups.set(index, ids);
+  }
+
+  private recallControlGroup(index: number) {
+    const ids = this.controlGroups.get(index);
+    if (!ids || ids.size === 0) return;
+
+    const now = this.time.now;
+    const centerCamera =
+      this.lastGroupRecall.index === index &&
+      now - this.lastGroupRecall.at <= CONTROL_GROUP_RECALL_DOUBLE_MS;
+    this.lastGroupRecall = { index, at: now };
+
+    this.clearSelection();
+    let sumX = 0;
+    let sumY = 0;
+    let count = 0;
+    ids.forEach((unitId) => {
+      const container = this.unitSprites.get(unitId);
+      if (!container) return;
+      this.selectedUnitIds.add(unitId);
+      const ring = container.getData('selectRing') as Phaser.GameObjects.Graphics;
+      ring?.setVisible(true);
+      // container.x/y are already world coordinates; panTo() expects grid ones.
+      sumX += container.x;
+      sumY += container.y;
+      count++;
+    });
+    this.notifySelectionChange();
+
+    if (centerCamera && count > 0) {
+      this.cameras.main.pan(sumX / count, sumY / count, 250, 'Power2');
+    }
   }
 
   private handleRightClickCommand(pointer: Phaser.Input.Pointer) {
