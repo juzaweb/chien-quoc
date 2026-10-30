@@ -16,15 +16,25 @@ import { HUD } from './components/HUD.js';
 import { BuildMenu } from './components/BuildMenu.js';
 import { EntityDetails } from './components/EntityDetails.js';
 import { Minimap } from './components/Minimap.js';
-import { Shield, Sparkles, Swords, AlertCircle } from 'lucide-react';
+import { AuthScreen } from './components/AuthScreen.js';
+import {
+  AuthUser,
+  clearStoredToken,
+  fetchCurrentUser,
+  getServerUrl,
+  getStoredToken,
+  isAuthRejection
+} from './auth/api.js';
+import { AlertCircle } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [room, setRoom] = useState<Room | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
-  const [playerName, setPlayerName] = useState<string>(() => {
-    return localStorage.getItem('cq_player_name') || '';
-  });
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [isRestoringSession, setIsRestoringSession] = useState<boolean>(true);
+  const [isJoining, setIsJoining] = useState<boolean>(false);
   const [isJoined, setIsJoined] = useState<boolean>(false);
+  const playerName = authUser?.displayName ?? '';
 
   // Player state
   const [playerColor, setPlayerColor] = useState<string>('#3b82f6');
@@ -42,6 +52,9 @@ export const App: React.FC = () => {
   // References
   const gameRef = useRef<Phaser.Game | null>(null);
   const sceneRef = useRef<WorldScene | null>(null);
+  // Distinguishes an intentional logout from a dropped connection, so logging
+  // out does not show a "lost connection" banner.
+  const isLeavingRef = useRef<boolean>(false);
 
   const showNotification = (msg: string) => {
     setNotification(msg);
@@ -50,19 +63,42 @@ export const App: React.FC = () => {
     }, 3500);
   };
 
-  const handleJoinGame = async (nameToUse: string) => {
-    try {
-      const serverHost = window.location.hostname || 'localhost';
-      const httpProtocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-      const serverUrl = `${httpProtocol}//${serverHost}:2567`;
+  // Restore a previous session on load so a refresh drops straight back in.
+  useEffect(() => {
+    let cancelled = false;
 
-      const client = new Client(serverUrl);
-      const effectiveName = nameToUse || `Lord_${Math.floor(Math.random() * 900 + 100)}`;
-      localStorage.setItem('cq_player_name', effectiveName);
-
-      const joinedRoom = await client.joinOrCreate('world_room', {
-        playerName: effectiveName
+    fetchCurrentUser()
+      .then((user) => {
+        if (cancelled || !user) return;
+        setAuthUser(user);
+        // Session is still valid: go straight into the world.
+        void connectToWorld();
+      })
+      .finally(() => {
+        if (!cancelled) setIsRestoringSession(false);
       });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const connectToWorld = async () => {
+    const token = getStoredToken();
+    if (!token) {
+      setAuthUser(null);
+      showNotification('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      return;
+    }
+
+    setIsJoining(true);
+    try {
+      const client = new Client(getServerUrl());
+      // Sent as `_authToken` on the room socket; `WorldRoom.onAuth` verifies it.
+      client.auth.token = token;
+
+      const joinedRoom = await client.joinOrCreate('world_room', {});
 
       setRoom(joinedRoom);
       setIsConnected(true);
@@ -78,7 +114,6 @@ export const App: React.FC = () => {
       // Listen to player state
       cb.onAdd('players', (p: any, sessionId: any) => {
         if (sessionId === joinedRoom.sessionId) {
-          setPlayerName(p.name);
           setPlayerColor(p.color);
           setResources({ wood: p.wood, food: p.food, gold: p.gold, stone: p.stone });
           setPopulation(p.population);
@@ -92,14 +127,50 @@ export const App: React.FC = () => {
         }
       });
 
-      joinedRoom.onLeave((code) => {
+      joinedRoom.onLeave(() => {
         setIsConnected(false);
+        setRoom(null);
+        setIsJoined(false);
+        if (isLeavingRef.current) {
+          isLeavingRef.current = false;
+          return;
+        }
         showNotification('Mất kết nối với máy chủ.');
       });
     } catch (err: any) {
       console.error('Failed to connect to game server:', err);
-      showNotification('Không thể kết nối đến máy chủ game. Hãy kiểm tra server đã chạy ở port 2567!');
+      if (isAuthRejection(err)) {
+        clearStoredToken();
+        setAuthUser(null);
+        showNotification('Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.');
+      } else {
+        showNotification(
+          'Không thể kết nối đến máy chủ game. Hãy kiểm tra server đã chạy ở port 2567!'
+        );
+      }
+    } finally {
+      setIsJoining(false);
     }
+  };
+
+  const handleAuthenticated = (user: AuthUser) => {
+    setAuthUser(user);
+    void connectToWorld();
+  };
+
+  const handleLeaveGame = () => {
+    // Only suppress the disconnect banner when a live room is being closed;
+    // setting the flag with no room would swallow the next real disconnect.
+    if (room) {
+      isLeavingRef.current = true;
+      room.leave();
+    }
+    clearStoredToken();
+    setRoom(null);
+    setIsJoined(false);
+    setIsConnected(false);
+    setSelectedEntity(null);
+    setAuthUser(null);
   };
 
   // Keyboard hotkeys
@@ -162,15 +233,17 @@ export const App: React.FC = () => {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-950 font-sans">
-      {/* Phaser Canvas */}
-      <PhaserGame
-        room={room}
-        playerName={playerName}
-        onSelectionChange={(entity) => setSelectedEntity(entity)}
-        onPlacementCancelled={() => setActiveBuildingType(null)}
-        gameRef={gameRef}
-        sceneRef={sceneRef}
-      />
+      {/* Phaser Canvas — mounted only once the player is in the world */}
+      {isJoined && (
+        <PhaserGame
+          room={room}
+          playerName={playerName}
+          onSelectionChange={(entity) => setSelectedEntity(entity)}
+          onPlacementCancelled={() => setActiveBuildingType(null)}
+          gameRef={gameRef}
+          sceneRef={sceneRef}
+        />
+      )}
 
       {/* Top HUD */}
       {isJoined && (
@@ -218,57 +291,32 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Lobby Join Modal */}
-      {!isJoined && (
-        <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="aoe-panel w-full max-w-md p-6 rounded-xl flex flex-col items-center text-center shadow-2xl border-2 border-amber-600">
-            <div className="p-3 rounded-full bg-amber-950/60 border border-amber-600/50 mb-3 text-amber-400">
-              <Swords size={36} />
-            </div>
+      {/* Auth Gate: register / login before entering the world */}
+      {!isJoined && !isRestoringSession && !isJoining && (
+        <AuthScreen onAuthenticated={handleAuthenticated} />
+      )}
 
-            <h1 className="font-medieval text-2xl font-bold text-amber-300 tracking-wider mb-1">
-              CHIẾN QUỐC MMO RTS
-            </h1>
-            <p className="text-xs text-slate-300 mb-6 max-w-xs">
-              Trò chơi chiến thuật thời gian thực 2.5D Isometric. Xây dựng đế chế, khai khoáng và thống nhất thiên hạ!
-            </p>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleJoinGame(playerName);
-              }}
-              className="w-full space-y-4"
-            >
-              <div className="text-left">
-                <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Tên Lãnh Chúa / Đế Quốc:
-                </label>
-                <input
-                  type="text"
-                  value={playerName}
-                  onChange={(e) => setPlayerName(e.target.value)}
-                  placeholder="Nhập tên của bạn (vd: Đại Việt)"
-                  className="w-full px-3 py-2 rounded bg-slate-900 border border-amber-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-amber-400"
-                  autoFocus
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-2.5 rounded bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-slate-950 font-bold tracking-wider text-sm uppercase shadow-lg transition-all border border-amber-400 cursor-pointer"
-              >
-                Gia Nhập Thế Giới
-              </button>
-            </form>
-
-            <div className="mt-6 text-[11px] text-slate-400 space-y-1">
-              <div>Phím <span className="text-amber-400 font-mono">WASD / Phím mũi tên</span> để di chuyển camera</div>
-              <div>Cuộn <span className="text-amber-400 font-mono">Chuột</span> để phóng to/thu nhỏ</div>
-              <div><span className="text-amber-400 font-mono">Chuột trái</span> chọn / quét quân, <span className="text-amber-400 font-mono">Chuột phải</span> điều quân & khai thác</div>
-            </div>
+      {/* Session restore / world connection spinner */}
+      {(isRestoringSession || isJoining) && (
+        <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-40 p-4">
+          <div className="aoe-panel px-8 py-6 rounded-xl flex flex-col items-center gap-3 shadow-2xl border-2 border-amber-600">
+            <div className="w-8 h-8 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
+            <span className="text-sm text-slate-300">
+              {isRestoringSession ? 'Đang khôi phục phiên đăng nhập...' : 'Đang kết nối vào thế giới...'}
+            </span>
           </div>
         </div>
+      )}
+
+      {/* Leave game */}
+      {isJoined && (
+        <button
+          type="button"
+          onClick={handleLeaveGame}
+          className="absolute top-16 right-2 z-30 px-3 py-1.5 rounded bg-slate-900/90 border border-slate-700 text-[11px] text-slate-300 hover:border-amber-500 hover:text-amber-300 transition-colors cursor-pointer"
+        >
+          Đăng xuất
+        </button>
       )}
     </div>
   );

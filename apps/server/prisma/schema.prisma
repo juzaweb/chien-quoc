@@ -9,6 +9,18 @@ generator client {
   provider = "prisma-client-js"
 }
 
+model User {
+  id             String   @id
+  username       String   @unique
+  displayName    String
+  // Lowercased, diacritic-stripped form of `displayName`. SQLite's lower()
+  // only folds ASCII, so uniqueness is enforced on this key instead.
+  displayNameKey String   @unique
+  passwordHash   String
+  createdAt      DateTime @default(now())
+  lastLoginAt    DateTime @default(now()) @updatedAt
+}
+
 model Player {
   id            String     @id
   name          String     @unique

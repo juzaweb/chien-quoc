@@ -1,5 +1,6 @@
-import { Room, Client } from '@colyseus/core';
+import { Room, Client, ServerError, ErrorCode } from '@colyseus/core';
 import { DatabaseService } from '../services/DatabaseService.js';
+import { AuthService } from '../services/AuthService.js';
 import {
   BUILDING_BLUEPRINTS,
   BuildingBlueprint,
@@ -354,8 +355,35 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
   }
 
+  /**
+   * Rejects anonymous connections: a valid account token is required before a
+   * seat is reserved, so `onJoin` can trust the identity it receives.
+   */
+  onAuth(client: Client, options: any, context: { token?: string }) {
+    const payload = AuthService.verifyToken(context?.token);
+    if (!payload) {
+      // AUTH_FAILED (525) is the canonical matchmaking code; the client checks
+      // the code, not the message, to decide whether to clear the stored token.
+      throw new ServerError(ErrorCode.AUTH_FAILED, 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.');
+    }
+
+    return {
+      userId: payload.id,
+      username: payload.username,
+      displayName: payload.displayName
+    };
+  }
+
   async onJoin(client: Client, options: any) {
-    const playerName = (options && options.playerName) || `Emperor_${client.sessionId.substring(0, 4)}`;
+    // `onAuth` runs before every join and rejects anything without a verified
+    // token, so the account name is the only ownership key. There is deliberately
+    // no fallback to `options.playerName`: a client-supplied name would let a
+    // player join as somebody else's empire.
+    const authUser = client.auth as { displayName?: string } | undefined;
+    if (!authUser?.displayName) {
+      throw new Error('Cannot join without an authenticated account.');
+    }
+    const playerName = authUser.displayName;
 
     try {
       // Wait for the world snapshot to be fully restored before touching state.

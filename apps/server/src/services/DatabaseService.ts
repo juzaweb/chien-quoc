@@ -7,7 +7,8 @@ import { PlayerState } from '../schema/PlayerState.js';
 import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
-import { DATABASE_SCHEMA_STATEMENTS } from './databaseSchema.js';
+import { DATABASE_INDEX_STATEMENTS, DATABASE_TABLE_STATEMENTS } from './databaseSchema.js';
+import { normalizeForComparison } from '../utils/normalizeName.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,10 +79,51 @@ export class DatabaseService {
 
   /**
    * Creates all tables/indexes when they are missing. Safe to run on every boot.
+   *
+   * Tables come first, then the `User` migration, then indexes: an index on a
+   * column added by the migration would otherwise fail on an older database.
    */
   private static async ensureSchema() {
-    for (const statement of DATABASE_SCHEMA_STATEMENTS) {
+    for (const statement of DATABASE_TABLE_STATEMENTS) {
       await prisma.$executeRawUnsafe(statement);
+    }
+
+    await this.migrateUserTable();
+
+    for (const statement of DATABASE_INDEX_STATEMENTS) {
+      await prisma.$executeRawUnsafe(statement);
+    }
+  }
+
+  /**
+   * Brings a `User` table created by an earlier build up to date.
+   *
+   * The account table originally shipped without `displayNameKey`, so an
+   * existing `dev.db` would fail every registration with a 500. Columns are
+   * added defensively because SQLite has no `ADD COLUMN IF NOT EXISTS`.
+   */
+  private static async migrateUserTable() {
+    const columns = await prisma.$queryRawUnsafe<{ name: string }[]>(
+      'PRAGMA table_info("User");'
+    );
+    const existing = new Set(columns.map((column) => column.name));
+
+    if (!existing.has('displayNameKey')) {
+      await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "displayNameKey" TEXT;');
+    }
+
+    // Backfill any rows written before the column existed.
+    const legacyRows = await prisma.$queryRawUnsafe<
+      { id: string; displayName: string }[]
+    >('SELECT "id", "displayName" FROM "User" WHERE "displayNameKey" IS NULL;');
+
+    for (const row of legacyRows) {
+      const key = normalizeForComparison(row.displayName);
+      await prisma.$executeRawUnsafe(
+        'UPDATE "User" SET "displayNameKey" = ? WHERE "id" = ?;',
+        key,
+        row.id
+      );
     }
   }
 

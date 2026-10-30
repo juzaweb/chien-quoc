@@ -4,8 +4,22 @@
  * The server creates the database file and its tables on boot when they are
  * missing, so a fresh clone (or a deleted `database/` folder) works without
  * requiring the Prisma CLI. Every statement is idempotent.
+ *
+ * Tables and indexes are exported separately: `User` gained a column after the
+ * first release, so its indexes must be created *after* the migration that adds
+ * that column (SQLite cannot index a column that does not exist yet).
  */
-export const DATABASE_SCHEMA_STATEMENTS: readonly string[] = [
+export const DATABASE_TABLE_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS "User" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "username" TEXT NOT NULL,
+    "displayName" TEXT NOT NULL,
+    "displayNameKey" TEXT NOT NULL,
+    "passwordHash" TEXT NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastLoginAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`,
+
   `CREATE TABLE IF NOT EXISTS "Player" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "name" TEXT NOT NULL,
@@ -62,8 +76,15 @@ export const DATABASE_SCHEMA_STATEMENTS: readonly string[] = [
     "remainingAmount" REAL NOT NULL,
     "maxAmount" REAL NOT NULL,
     "updatedAt" DATETIME NOT NULL
-  );`,
+  );`
+];
 
+/**
+ * Indexes created after `migrateUserTable()` has ensured every column exists.
+ */
+export const DATABASE_INDEX_STATEMENTS: readonly string[] = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS "User_username_key" ON "User"("username");`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "User_displayNameKey_key" ON "User"("displayNameKey");`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "Player_name_key" ON "Player"("name");`,
   `CREATE INDEX IF NOT EXISTS "Building_ownerId_idx" ON "Building"("ownerId");`,
   `CREATE INDEX IF NOT EXISTS "Unit_ownerId_idx" ON "Unit"("ownerId");`,
