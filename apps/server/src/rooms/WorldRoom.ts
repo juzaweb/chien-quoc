@@ -41,10 +41,15 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private nextEntityId: number = 1000;
   private attackTimers: Map<string, number> = new Map();
   private harvestTimers: Map<string, number> = new Map();
+  private readyPromise: Promise<void> | null = null;
 
   onCreate(options: any) {
     this.setState(new WorldState());
-    this.initializeWorldPersistence();
+
+    // Keep a reference so onJoin can wait until the persisted world is restored.
+    // Without this, a client could join while state.buildings is still empty and
+    // spawn a duplicate randomly-positioned base.
+    this.readyPromise = this.initializeWorldPersistence();
 
     // Setup network message listeners
     this.onMessage(NetworkMessage.PLACE_BUILDING, (client, message: PlaceBuildingPayload) => {
@@ -82,7 +87,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     try {
       // 1. Load resources from SQLite (regenerate if old snapshot is from small 60x60 map)
       const savedResources = await DatabaseService.loadResources();
-      const maxStoredCoord = (savedResources || []).reduce((max, r) => Math.max(max, r.gridX, r.gridY), 0);
+      let maxStoredCoord = 0;
+      for (const res of savedResources || []) {
+        maxStoredCoord = Math.max(maxStoredCoord, res.gridX, res.gridY);
+      }
       const isOutdatedMap = !savedResources || savedResources.length < 500 || maxStoredCoord < 100;
 
       if (!isOutdatedMap && savedResources.length > 0) {
@@ -146,9 +154,129 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       if (savedPlayers.length > 0) {
         console.log(`🏰 [WorldRoom] Restored bases for ${savedPlayers.length} empires from database.`);
       }
+
+      // Keep generated entity ids unique across restarts (avoid overwriting persisted rows)
+      this.state.resourceNodes.forEach((n) => this.bumpEntityId(n.id));
+      this.state.buildings.forEach((b) => this.bumpEntityId(b.id));
+      this.state.units.forEach((u) => this.bumpEntityId(u.id));
     } catch (err) {
       console.error('❌ [WorldRoom] Failed to initialize persistence:', err);
     }
+  }
+
+  /**
+   * Advances nextEntityId past any persisted id (`b_1234`, `u_1234`, `res_1234`).
+   */
+  private bumpEntityId(id: string) {
+    const match = /(\d+)$/.exec(id);
+    if (!match) return;
+    const value = Number(match[1]);
+    if (Number.isFinite(value) && value > this.nextEntityId) {
+      this.nextEntityId = value;
+    }
+  }
+
+  /**
+   * Deterministic 32-bit hash so the same player name always yields the same spawn area.
+   */
+  private hashPlayerName(name: string): number {
+    let hash = 2166136261;
+    for (let i = 0; i < name.length; i++) {
+      hash ^= name.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  /**
+   * Checks whether a footprint fits inside the playable area and does not overlap
+   * dirt roads or existing buildings. Resource nodes are handled separately so a
+   * returning player can still claim their deterministic spot.
+   */
+  private isFootprintFree(gx: number, gy: number, sizeX: number, sizeY: number): boolean {
+    const margin = 6;
+    if (gx < margin || gy < margin) return false;
+    if (gx + sizeX > MAP_GRID_WIDTH - margin || gy + sizeY > MAP_GRID_HEIGHT - margin) return false;
+
+    for (let x = gx; x < gx + sizeX; x++) {
+      for (let y = gy; y < gy + sizeY; y++) {
+        if (isDirtRoadTile(x, y)) return false;
+      }
+    }
+
+    let clear = true;
+    this.state.buildings.forEach((b: BuildingState) => {
+      if (!clear) return;
+      const overlapX = gx < b.gridX + b.sizeX && gx + sizeX > b.gridX;
+      const overlapY = gy < b.gridY + b.sizeY && gy + sizeY > b.gridY;
+      if (overlapX && overlapY) clear = false;
+    });
+
+    return clear;
+  }
+
+  /**
+   * Counts resource nodes sitting inside the footprint (they would be buried
+   * underneath the Town Center).
+   */
+  private countResourcesInFootprint(gx: number, gy: number, sizeX: number, sizeY: number): number {
+    let count = 0;
+    this.state.resourceNodes.forEach((res: ResourceNodeState) => {
+      if (
+        res.gridX >= gx &&
+        res.gridX < gx + sizeX &&
+        res.gridY >= gy &&
+        res.gridY < gy + sizeY
+      ) {
+        count++;
+      }
+    });
+    return count;
+  }
+
+  private isSpawnAreaClear(gx: number, gy: number, sizeX: number, sizeY: number): boolean {
+    return this.isFootprintFree(gx, gy, sizeX, sizeY) && this.countResourcesInFootprint(gx, gy, sizeX, sizeY) === 0;
+  }
+
+  /**
+   * Prevents stacking duplicate resource nodes when a base is respawned on the
+   * exact same deterministic spot.
+   */
+  private hasResourceAt(gx: number, gy: number): boolean {
+    let found = false;
+    this.state.resourceNodes.forEach((res: ResourceNodeState) => {
+      if (!found && res.gridX === gx && res.gridY === gy) {
+        found = true;
+      }
+    });
+    return found;
+  }
+
+  /**
+   * Deterministic fallback spawn: spiral outward from the map center until a clear
+   * footprint is found. Never random, so retries are stable.
+   */
+  private findSpawnNearCenter(sizeX: number, sizeY: number): { x: number; y: number } {
+    const centerX = Math.floor(MAP_GRID_WIDTH / 2);
+    const centerY = Math.floor(MAP_GRID_HEIGHT / 2);
+
+    for (let radius = 8; radius < Math.max(MAP_GRID_WIDTH, MAP_GRID_HEIGHT); radius += 4) {
+      for (let i = 0; i < radius * 8; i++) {
+        const angle = (i / (radius * 8)) * Math.PI * 2;
+        const gx = Math.round(centerX + Math.cos(angle) * radius) - Math.floor(sizeX / 2);
+        const gy = Math.round(centerY + Math.sin(angle) * radius) - Math.floor(sizeY / 2);
+
+        if (this.isSpawnAreaClear(gx, gy, sizeX, sizeY)) {
+          return { x: gx, y: gy };
+        }
+      }
+    }
+
+    // Ultimate fallback: keep the previous behaviour so the player is never base-less
+    return {
+      x: Math.floor(MAP_GRID_WIDTH / 2) - Math.floor(sizeX / 2),
+      y: Math.floor(MAP_GRID_HEIGHT / 2) - Math.floor(sizeY / 2)
+    };
   }
 
   private generateWorldResources() {
@@ -226,6 +354,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     const playerName = (options && options.playerName) || `Emperor_${client.sessionId.substring(0, 4)}`;
 
     try {
+      // Wait for the world snapshot to be fully restored before touching state.
+      // Otherwise state.buildings is empty and we would spawn a duplicate base.
+      if (this.readyPromise) {
+        await this.readyPromise;
+      }
+
       // Check if player profile already exists in Database
       const savedProfile = await DatabaseService.loadPlayerProfile(playerName);
 
@@ -301,18 +435,40 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     const player = this.state.players.get(sessionId);
     if (!player) return;
 
-    // Find a clear area for spawn across large map, avoiding roads
-    let spawnX = 20 + Math.floor(Math.random() * (MAP_GRID_WIDTH - 40));
-    let spawnY = 20 + Math.floor(Math.random() * (MAP_GRID_HEIGHT - 40));
-    let roadAttempts = 0;
-    while (isDirtRoadTile(spawnX, spawnY) && roadAttempts < 50) {
-      spawnX = 20 + Math.floor(Math.random() * (MAP_GRID_WIDTH - 40));
-      spawnY = 20 + Math.floor(Math.random() * (MAP_GRID_HEIGHT - 40));
-      roadAttempts++;
+    const tcBlueprint = BUILDING_BLUEPRINTS.TOWN_CENTER;
+
+    // Deterministic spawn: same player name always resolves to the same area,
+    // so re-joining never shuffles the empire around the map.
+    const baseHash = this.hashPlayerName(player.name);
+    const candidateCount = 512;
+    let spawnX = -1;
+    let spawnY = -1;
+
+    for (let attempt = 0; attempt < candidateCount; attempt++) {
+      // Golden-ratio stride keeps consecutive players far apart
+      const seedX = (baseHash + Math.imul(attempt, 0x9e3779b1)) >>> 0;
+      const seedY = ((baseHash >>> 16) + Math.imul(attempt, 0x85ebca6b)) >>> 0;
+
+      const usableX = MAP_GRID_WIDTH - 40;
+      const usableY = MAP_GRID_HEIGHT - 40;
+      const candidateX = 20 + (seedX % usableX);
+      const candidateY = 20 + (seedY % usableY);
+
+      if (this.isSpawnAreaClear(candidateX, candidateY, tcBlueprint.sizeX, tcBlueprint.sizeY)) {
+        spawnX = candidateX;
+        spawnY = candidateY;
+        break;
+      }
+    }
+
+    // Fallback: spiral scan from map center if every hashed candidate was blocked
+    if (spawnX < 0) {
+      const centered = this.findSpawnNearCenter(tcBlueprint.sizeX, tcBlueprint.sizeY);
+      spawnX = centered.x;
+      spawnY = centered.y;
     }
 
     // Create Town Center
-    const tcBlueprint = BUILDING_BLUEPRINTS.TOWN_CENTER;
     const tcId = `b_${++this.nextEntityId}`;
     const townCenter = new BuildingState();
     townCenter.id = tcId;
@@ -337,13 +493,17 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       { dx: 0, dy: -2 }
     ];
     starterTreeOffsets.forEach((off) => {
+      const gridX = spawnX + off.dx;
+      const gridY = spawnY + off.dy;
+      if (this.hasResourceAt(gridX, gridY)) return;
+
       const id = `res_${++this.nextEntityId}`;
       const node = new ResourceNodeState();
       node.id = id;
       node.type = 'TREE';
       node.resourceType = 'wood';
-      node.gridX = spawnX + off.dx;
-      node.gridY = spawnY + off.dy;
+      node.gridX = gridX;
+      node.gridY = gridY;
       node.remainingAmount = 200;
       node.maxAmount = 200;
       this.state.resourceNodes.set(id, node);
@@ -356,13 +516,17 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       { dx: 5, dy: 2 }
     ];
     starterBerryOffsets.forEach((off) => {
+      const gridX = spawnX + off.dx;
+      const gridY = spawnY + off.dy;
+      if (this.hasResourceAt(gridX, gridY)) return;
+
       const id = `res_${++this.nextEntityId}`;
       const node = new ResourceNodeState();
       node.id = id;
       node.type = 'BERRY_BUSH';
       node.resourceType = 'food';
-      node.gridX = spawnX + off.dx;
-      node.gridY = spawnY + off.dy;
+      node.gridX = gridX;
+      node.gridY = gridY;
       node.remainingAmount = 150;
       node.maxAmount = 150;
       this.state.resourceNodes.set(id, node);

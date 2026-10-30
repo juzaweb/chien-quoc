@@ -34,6 +34,8 @@ export interface SelectedEntityData {
 export class WorldScene extends Phaser.Scene {
   public room: Room | null = null;
   public mySessionId: string = '';
+  public myPlayerName: string = '';
+  private boundRoomId: string = '';
 
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasdKeys!: { [key: string]: Phaser.Input.Keyboard.Key };
@@ -66,6 +68,7 @@ export class WorldScene extends Phaser.Scene {
   public selectedBuildingId: string | null = null;
   public selectedResourceId: string | null = null;
   private hasCenteredOnSpawn: boolean = false;
+  private centerAttempts: number = 0;
 
   // Selection Drag Box
   private isDragSelecting: boolean = false;
@@ -237,11 +240,67 @@ export class WorldScene extends Phaser.Scene {
   }
 
   public setRoom(room: Room) {
+    const isNewRoom = room.roomId !== this.boundRoomId;
     this.room = room;
     this.mySessionId = room.sessionId;
+    this.boundRoomId = room.roomId;
+
+    // A fresh room means a fresh world snapshot: allow re-centering on the base.
+    if (isNewRoom) {
+      this.hasCenteredOnSpawn = false;
+      this.centerAttempts = 0;
+    }
+
     if (this.scene.isActive()) {
       this.bindRoomEvents(room);
+      this.centerOnOwnBaseIfNeeded();
     }
+  }
+
+  /**
+   * Player name is stable across reconnects (sessionId is not), so the camera can
+   * always locate this player's Town Center even after ownership is re-assigned.
+   */
+  public setPlayerName(playerName: string) {
+    this.myPlayerName = playerName;
+    this.centerOnOwnBaseIfNeeded();
+  }
+
+  private isOwnBuilding(ownerId: string): boolean {
+    if (!ownerId) return false;
+    return ownerId === this.mySessionId || (!!this.myPlayerName && ownerId === this.myPlayerName);
+  }
+
+  private centerOnOwnBaseIfNeeded() {
+    if (this.hasCenteredOnSpawn || !this.room) return;
+
+    // Player name / sessionId may not be known yet; retry on the next tick instead.
+    if (!this.mySessionId && !this.myPlayerName) return;
+
+    let target: any = null;
+    this.room.state.buildings.forEach((b: any) => {
+      if (!target && b.type === 'TOWN_CENTER' && this.isOwnBuilding(b.ownerId)) {
+        target = b;
+      }
+    });
+    if (!target) return;
+
+    this.hasCenteredOnSpawn = true;
+    const screenPos = gridToScreen(target.gridX + target.sizeX / 2, target.gridY + target.sizeY / 2);
+    this.cameras.main.centerOn(screenPos.x, screenPos.y);
+  }
+
+  /**
+   * Called from update() as a bounded fallback (max ~5s at 60fps) in case the
+   * Town Center arrives in a snapshot after the initial onAdd burst.
+   */
+  private retryCenterOnBase() {
+    if (this.hasCenteredOnSpawn) return;
+    if (this.centerAttempts++ > 300) {
+      this.hasCenteredOnSpawn = true; // give up, keep the default camera position
+      return;
+    }
+    this.centerOnOwnBaseIfNeeded();
   }
 
   public bindRoomEvents(room: Room) {
@@ -263,11 +322,7 @@ export class WorldScene extends Phaser.Scene {
     // 2. Synchronize Buildings
     cb.onAdd('buildings', (building: any, key: any) => {
       this.createBuildingSprite(key, building, cb);
-      if (building.ownerId === this.mySessionId && building.type === 'TOWN_CENTER' && !this.hasCenteredOnSpawn) {
-        this.hasCenteredOnSpawn = true;
-        const screenPos = gridToScreen(building.gridX + 1.5, building.gridY + 1.5);
-        this.cameras.main.centerOn(screenPos.x, screenPos.y);
-      }
+      this.centerOnOwnBaseIfNeeded();
     });
 
     cb.onRemove('buildings', (building: any, key: any) => {
@@ -1226,6 +1281,12 @@ export class WorldScene extends Phaser.Scene {
 
   update(time: number, delta: number) {
     this.updateViewportTerrain();
+
+    // Fallback: keep trying to focus this player's Town Center until the snapshot
+    // (or a delayed ownership sync) exposes it. Bounded so it stops after ~5s.
+    if (!this.hasCenteredOnSpawn) {
+      this.retryCenterOnBase();
+    }
 
     const dtSeconds = delta / 1000;
     const cameraSpeed = (600 / this.cameras.main.zoom) * dtSeconds;

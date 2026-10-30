@@ -165,6 +165,7 @@ export const App: React.FC = () => {
       {/* Phaser Canvas */}
       <PhaserGame
         room={room}
+        playerName={playerName}
         onSelectionChange={(entity) => setSelectedEntity(entity)}
         onPlacementCancelled={() => setActiveBuildingType(null)}
         gameRef={gameRef}

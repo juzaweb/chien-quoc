@@ -6,6 +6,7 @@ import { BuildingType } from '@chien-quoc/shared';
 
 interface PhaserGameProps {
   room: Room | null;
+  playerName: string;
   onSelectionChange: (entity: SelectedEntityData | null) => void;
   onPlacementCancelled: () => void;
   gameRef: React.MutableRefObject<Phaser.Game | null>;
@@ -14,12 +15,18 @@ interface PhaserGameProps {
 
 export const PhaserGame: React.FC<PhaserGameProps> = ({
   room,
+  playerName,
   onSelectionChange,
   onPlacementCancelled,
   gameRef,
   sceneRef
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  // Latest props for the one-time Phaser bootstrap closure
+  const playerNameRef = useRef(playerName);
+  const roomRef = useRef(room);
+  playerNameRef.current = playerName;
+  roomRef.current = room;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -48,8 +55,11 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
       scene.onSelectionChange = onSelectionChange;
       scene.onPlacementCancelled = onPlacementCancelled;
 
-      if (room) {
-        scene.setRoom(room);
+      if (playerNameRef.current) {
+        scene.setPlayerName(playerNameRef.current);
+      }
+      if (roomRef.current) {
+        scene.setRoom(roomRef.current);
       }
     });
 
@@ -76,6 +86,13 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
       sceneRef.current.setRoom(room);
     }
   }, [room]);
+
+  // Keep the scene aware of the stable player name so the camera can find the base
+  useEffect(() => {
+    if (sceneRef.current && playerName) {
+      sceneRef.current.setPlayerName(playerName);
+    }
+  }, [playerName, room]);
 
   return <div ref={containerRef} className="absolute inset-0 w-full h-full overflow-hidden" />;
 };
