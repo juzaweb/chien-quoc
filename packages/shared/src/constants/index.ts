@@ -15,6 +15,23 @@ export const SERVER_TICK_RATE = 20; // 20 ticks per second (50ms per tick)
  */
 export const MAX_SELECTION = 120;
 
+/**
+ * Upper bound on how many future waypoints one unit may hold. Shift+right click
+ * appends without bound otherwise, and every waypoint is replicated state that
+ * is persisted for the unit's lifetime.
+ */
+export const MAX_QUEUED_WAYPOINTS = 12;
+
+/**
+ * True when the building type produces units, i.e. when a rally point has any
+ * meaning. Shared so the client (skip the order) and the authoritative room
+ * (reject it) agree on which buildings accept `SET_RALLY_POINT` instead of each
+ * carrying its own copy of the rule.
+ */
+export function canTrainUnitsAt(type: BuildingType): boolean {
+  return (BUILDING_BLUEPRINTS[type]?.trainableUnits.length ?? 0) > 0;
+}
+
 export const INITIAL_PLAYER_RESOURCES: Resources = {
   wood: 300,
   food: 300,

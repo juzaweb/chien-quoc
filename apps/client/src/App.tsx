@@ -231,6 +231,11 @@ export const App: React.FC = () => {
     }
   };
 
+  // CTL-07: right-click on the minimap is a move order, not a camera pan.
+  const handleCommandAtGrid = (gx: number, gy: number) => {
+    sceneRef.current?.commandMoveTo(gx, gy);
+  };
+
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-950 font-sans">
       {/* Phaser Canvas — mounted only once the player is in the world */}
@@ -264,7 +269,7 @@ export const App: React.FC = () => {
       {isJoined && (
         <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between pointer-events-none select-none z-20 gap-3">
           {/* Left: Minimap */}
-          <Minimap room={room} sceneRef={sceneRef} onPanToGrid={handlePanToGrid} />
+          <Minimap room={room} sceneRef={sceneRef} onPanToGrid={handlePanToGrid} onCommandAtGrid={handleCommandAtGrid} />
 
           {/* Center: Selected Entity Info & Unit Training */}
           <EntityDetails

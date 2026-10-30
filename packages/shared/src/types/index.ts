@@ -52,6 +52,12 @@ export interface MoveUnitsPayload {
   unitIds: string[];
   targetGridX: number;
   targetGridY: number;
+  /**
+   * When true the waypoint is appended to the unit's queue instead of replacing
+   * its current order, so it walks through every point in order (Shift+right
+   * click). A non-queued move always clears whatever was queued.
+   */
+  queue?: boolean;
 }
 
 export interface TrainUnitPayload {
@@ -79,6 +85,17 @@ export interface StopUnitsPayload {
   unitIds: string[];
 }
 
+/**
+ * Sets the rally point of a building: freshly trained units walk there instead
+ * of standing at the door. Grid coordinates are validated server-side against
+ * the map bounds.
+ */
+export interface SetRallyPointPayload {
+  buildingId: string;
+  gridX: number;
+  gridY: number;
+}
+
 export enum NetworkMessage {
   PLACE_BUILDING = 'PLACE_BUILDING',
   MOVE_UNITS = 'MOVE_UNITS',
@@ -86,6 +103,7 @@ export enum NetworkMessage {
   ATTACK_TARGET = 'ATTACK_TARGET',
   HARVEST_RESOURCE = 'HARVEST_RESOURCE',
   STOP_UNITS = 'STOP_UNITS',
+  SET_RALLY_POINT = 'SET_RALLY_POINT',
   ERROR_NOTIFICATION = 'ERROR_NOTIFICATION',
   SYSTEM_ANNOUNCEMENT = 'SYSTEM_ANNOUNCEMENT'
 }

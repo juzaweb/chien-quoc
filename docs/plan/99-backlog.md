@@ -58,3 +58,11 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
   `Ctrl+1..9`) còn `App.tsx` bind `window` keydown (`Q/W/E/R/T`, `Esc`). Hệ `window`
   không chặn modifier nên `Ctrl+W` vừa đóng tab vừa kích hoạt Barracks. Gộp về một chỗ
   và thêm guard modifier + `event.repeat`.
+- **Preview Shift không phản ánh `MAX_QUEUED_WAYPOINTS`** — quá 12 điểm thì server lặng lẽ
+  bỏ nhưng client vẫn vẽ đường tới con trỏ, người chơi tưởng đã nhận. Cần hoặc gửi
+  `ERROR_NOTIFICATION` (chỉ khi thực sự chạm trần), hoặc đổi màu/đứt nét phần preview.
+- **`WorldScene.ts` 2006 dòng, `WorldRoom.ts` 1274 dòng** — cả hai đã vượt mốc ~1000 dòng
+  và mỗi CTL lại thêm vào. Đề xuất tách trước khi làm CMD-*: input/selection
+  (`WorldScene`), overlay/hotkey (`WorldScene`, đã chớm thành nhóm `bind*` + `update*`),
+  và chia `WorldRoom` thành movement / combat / economy / commands. Không làm trong lúc
+  đang mở diff CTL-02..07 để tránh trộn refactor với feature.

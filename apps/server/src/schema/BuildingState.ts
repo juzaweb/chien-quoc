@@ -14,5 +14,8 @@ export class BuildingState extends Schema {
   @type('number') constructionProgress: number = 100;
   @type(['string']) trainingQueue = new ArraySchema<string>();
   @type('number') trainingProgressMs: number = 0;
+  /** Rally point in grid coordinates; -1 on both axes means "not set". */
+  @type('number') rallyX: number = -1;
+  @type('number') rallyY: number = -1;
 }
 

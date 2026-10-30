@@ -99,10 +99,10 @@ flowchart TD
 | CTL-01 | 1 | M | DONE |
 | CTL-02 | 1 | M | DONE |
 | CTL-03 | 1 | M | DONE |
-| CTL-04 | 1 | S | TODO |
-| CTL-05 | 1 | L | TODO |
-| CTL-06 | 1 | M | TODO |
-| CTL-07 | 1 | S | TODO |
+| CTL-04 | 1 | S | DONE |
+| CTL-05 | 1 | L | DONE |
+| CTL-06 | 1 | M | DONE |
+| CTL-07 | 1 | S | DONE |
 | CMD-01 | 2 | L | TODO |
 | CMD-02 | 2 | M | TODO |
 | CMD-03 | 2 | M | TODO |

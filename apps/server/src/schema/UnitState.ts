@@ -1,4 +1,4 @@
-import { Schema, type } from '@colyseus/schema';
+import { Schema, type, ArraySchema } from '@colyseus/schema';
 
 export class UnitState extends Schema {
   @type('string') id: string = '';
@@ -16,5 +16,10 @@ export class UnitState extends Schema {
   @type('string') targetEntityType: string = ''; // 'unit' | 'building' | 'resource'
   @type('string') carryingResourceType: string = '';
   @type('number') carryingAmount: number = 0;
+  // CTL-05: future waypoints, consumed one per arrival. Kept in two parallel
+  // arrays because Colyseus cannot replicate an array of objects without a
+  // dedicated Schema per waypoint.
+  @type(['number']) queueTargetX = new ArraySchema<number>();
+  @type(['number']) queueTargetY = new ArraySchema<number>();
 }
 

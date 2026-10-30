@@ -8,6 +8,7 @@ import {
   INITIAL_POPULATION_CAP,
   MAP_GRID_HEIGHT,
   MAP_GRID_WIDTH,
+  MAX_QUEUED_WAYPOINTS,
   MAX_SELECTION,
   NetworkMessage,
   POPULATION_PER_HOUSE,
@@ -17,10 +18,12 @@ import {
   AttackTargetPayload,
   HarvestResourcePayload,
   StopUnitsPayload,
+  SetRallyPointPayload,
   SERVER_TICK_RATE,
   UNIT_BLUEPRINTS,
   UnitBlueprint,
   UnitType,
+  canTrainUnitsAt,
   isDirtRoadTile
 } from '@chien-quoc/shared';
 import { WorldState } from '../schema/WorldState.js';
@@ -88,6 +91,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     this.onMessage(NetworkMessage.STOP_UNITS, (client, message: StopUnitsPayload) => {
       this.handleStopUnits(client, message);
+    });
+
+    this.onMessage(NetworkMessage.SET_RALLY_POINT, (client, message: SetRallyPointPayload) => {
+      this.handleSetRallyPoint(client, message);
     });
 
     // Run authoritative tick loop
@@ -708,6 +715,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       return;
     }
 
+    // Shift+right click appends; a plain move replaces the whole order. Anything
+    // that is not literally `true` is treated as a direct move, so a malformed
+    // payload can never sneak extra state into a unit.
+    const queueWaypoint = payload.queue === true;
+
     payload.unitIds.forEach((uId, idx) => {
       const unit = this.state.units.get(uId);
       if (unit && unit.ownerId === client.sessionId) {
@@ -715,13 +727,79 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         const offsetX = (idx % 3) * 0.5;
         const offsetY = Math.floor(idx / 3) * 0.5;
 
-        unit.targetX = Math.max(0, Math.min(MAP_GRID_WIDTH - 1, payload.targetGridX + offsetX));
-        unit.targetY = Math.max(0, Math.min(MAP_GRID_HEIGHT - 1, payload.targetGridY + offsetY));
+        const targetX = Math.max(0, Math.min(MAP_GRID_WIDTH - 1, payload.targetGridX + offsetX));
+        const targetY = Math.max(0, Math.min(MAP_GRID_HEIGHT - 1, payload.targetGridY + offsetY));
+
+        if (queueWaypoint) {
+          if (unit.queueTargetX.length >= MAX_QUEUED_WAYPOINTS) return;
+          unit.queueTargetX.push(targetX);
+          unit.queueTargetY.push(targetY);
+          // A unit with no order in flight has nothing to finish, so the point
+          // it just asked for becomes the active order immediately.
+          if (unit.actionState === 'IDLE') {
+            this.advanceQueuedWaypoint(unit);
+          }
+          return;
+        }
+
+        unit.queueTargetX.clear();
+        unit.queueTargetY.clear();
+        unit.targetX = targetX;
+        unit.targetY = targetY;
         unit.actionState = 'MOVING';
         unit.targetEntityId = '';
         unit.targetEntityType = '';
       }
     });
+  }
+
+  /**
+   * Pops the next queued waypoint into the unit's active movement order.
+   *
+   * The two arrays are always written together, so a length mismatch can only
+   * come from a corrupted snapshot; when it happens the queue is dropped rather
+   * than half-applied.
+   *
+   * @returns true when a waypoint was consumed and the unit is now MOVING.
+   */
+  private advanceQueuedWaypoint(unit: UnitState): boolean {
+    if (unit.queueTargetX.length !== unit.queueTargetY.length) {
+      unit.queueTargetX.clear();
+      unit.queueTargetY.clear();
+      return false;
+    }
+    if (unit.queueTargetX.length === 0) return false;
+
+    const nextX = unit.queueTargetX.shift();
+    const nextY = unit.queueTargetY.shift();
+    if (typeof nextX !== 'number' || typeof nextY !== 'number') {
+      unit.queueTargetX.clear();
+      unit.queueTargetY.clear();
+      return false;
+    }
+
+    unit.targetX = nextX;
+    unit.targetY = nextY;
+    unit.targetEntityId = '';
+    unit.targetEntityType = '';
+    unit.actionState = 'MOVING';
+    return true;
+  }
+
+  /**
+   * Ends the unit's current order and starts the next queued waypoint, if any.
+   *
+   * Called wherever an order finishes or becomes invalid (arrival, target gone,
+   * resource depleted). Without it a Shift-queued path would be stranded: the
+   * waypoints would sit in the snapshot and never run, because nothing else ever
+   * consumes them.
+   */
+  private resumeQueuedWaypoint(unit: UnitState) {
+    unit.targetEntityId = '';
+    unit.targetEntityType = '';
+    if (!this.advanceQueuedWaypoint(unit)) {
+      unit.actionState = 'IDLE';
+    }
   }
 
   private handleTrainUnit(client: Client, payload: TrainUnitPayload) {
@@ -794,6 +872,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     payload.unitIds.forEach((uId) => {
       const unit = this.state.units.get(uId);
       if (unit && unit.ownerId === client.sessionId) {
+        // A new order replaces any queued path; leaving waypoints behind would
+        // make the unit resume an old route after the attack finishes.
+        unit.queueTargetX.clear();
+        unit.queueTargetY.clear();
         unit.targetEntityId = payload.targetEntityId;
         unit.targetEntityType = payload.targetType;
         unit.actionState = 'ATTACKING';
@@ -821,6 +903,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     payload.unitIds.forEach((uId) => {
       const unit = this.state.units.get(uId);
       if (unit && unit.ownerId === client.sessionId && UNIT_BLUEPRINTS[unit.type as UnitType]?.canHarvest) {
+        unit.queueTargetX.clear();
+        unit.queueTargetY.clear();
         unit.targetEntityId = payload.resourceNodeId;
         unit.targetEntityType = 'resource';
         unit.targetX = resource.gridX;
@@ -841,6 +925,9 @@ export class WorldRoom extends Room<{ state: WorldState }> {
    * order state. Dropping `atk_<id>` would reset the weapon cooldown, letting a
    * client spam stop + attack to land a hit every tick instead of every
    * cooldown. Leaving `harv_<id>` alone keeps partial harvest progress.
+   *
+   * Queued waypoints ARE cleared: they are the remaining part of the cancelled
+   * order, so resuming them later would undo the stop.
    */
   private handleStopUnits(client: Client, payload: StopUnitsPayload) {
     if (!payload?.unitIds || payload.unitIds.length === 0) return;
@@ -858,7 +945,56 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       unit.targetEntityType = '';
       unit.targetX = unit.x;
       unit.targetY = unit.y;
+      unit.queueTargetX.clear();
+      unit.queueTargetY.clear();
     });
+  }
+
+  /**
+   * Sets where this building's newly trained units should walk to.
+   *
+   * Only the owner may set it: a foreign building id is refused outright rather
+   * than silently ignored, so a client bug surfaces as an error toast instead of
+   * a rally point that appears to work. Coordinates are validated against the
+   * map bounds because the client sends grid positions straight from the pointer
+   * and a stray click outside the terrain would otherwise create an unreachable
+   * target that traps every future unit in MOVING forever. Buildings that train
+   * nothing are refused too: a rally flag on a House is a promise the simulation
+   * can never keep.
+   */
+  private handleSetRallyPoint(client: Client, payload: SetRallyPointPayload) {
+    if (!payload?.buildingId) return;
+
+    const building = this.state.buildings.get(payload.buildingId);
+    if (!building) {
+      this.rejectCommand(client, 'Building no longer exists');
+      return;
+    }
+    if (building.ownerId !== client.sessionId) {
+      this.rejectCommand(client, 'Not your building');
+      return;
+    }
+    if (!canTrainUnitsAt(building.type as BuildingType)) {
+      this.rejectCommand(client, 'This building cannot train units');
+      return;
+    }
+
+    const gridX = Number(payload.gridX);
+    const gridY = Number(payload.gridY);
+    if (
+      !Number.isFinite(gridX) ||
+      !Number.isFinite(gridY) ||
+      gridX < 0 ||
+      gridY < 0 ||
+      gridX >= MAP_GRID_WIDTH ||
+      gridY >= MAP_GRID_HEIGHT
+    ) {
+      this.rejectCommand(client, 'Invalid rally point');
+      return;
+    }
+
+    building.rallyX = gridX;
+    building.rallyY = gridY;
   }
 
   /** Notify a client that a command was refused, so the UI can explain why. */
@@ -889,7 +1025,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         if (blueprint && building.trainingProgressMs >= blueprint.trainTimeMs) {
           building.trainingQueue.shift();
           building.trainingProgressMs = 0;
-          this.spawnTrainedUnit(building.ownerId, currentUnitType, building.gridX, building.gridY + building.sizeY);
+          this.spawnTrainedUnit(building, currentUnitType);
         }
       }
     });
@@ -944,7 +1080,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
           unit.y += (dy / dist) * moveStep;
         } else {
           if (unit.actionState === 'MOVING') {
-            unit.actionState = 'IDLE';
+            // Arrived: walk on to the next queued waypoint if there is one.
+            this.resumeQueuedWaypoint(unit);
           }
         }
       }
@@ -961,7 +1098,18 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     });
   }
 
-  private spawnTrainedUnit(ownerId: string, unitType: UnitType, x: number, y: number) {
+  /**
+   * Creates a finished unit at the building's front door and, if the building
+   * has a rally point, sends it walking there immediately (CTL-06).
+   *
+   * The spawn tile itself stays IDLE rather than MOVING-to-itself: the movement
+   * pass would zero the distance and drop it back to IDLE one tick later anyway,
+   * and the flag/waypoint UI would flicker in between.
+   */
+  private spawnTrainedUnit(building: BuildingState, unitType: UnitType) {
+    const ownerId = building.ownerId;
+    const x = building.gridX;
+    const y = building.gridY + building.sizeY;
     const blueprint = UNIT_BLUEPRINTS[unitType];
     const uId = `u_${++this.nextEntityId}`;
     const unit = new UnitState();
@@ -976,6 +1124,17 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     unit.hp = blueprint.maxHp;
     unit.maxHp = blueprint.maxHp;
     unit.actionState = 'IDLE';
+
+    if (building.rallyX >= 0 && building.rallyY >= 0) {
+      const rallyX = Math.max(0, Math.min(MAP_GRID_WIDTH - 1, building.rallyX));
+      const rallyY = Math.max(0, Math.min(MAP_GRID_HEIGHT - 1, building.rallyY));
+      // A rally point on the spawn tile needs no order; anything else does.
+      if (rallyX !== unit.x || rallyY !== unit.y) {
+        unit.targetX = rallyX;
+        unit.targetY = rallyY;
+        unit.actionState = 'MOVING';
+      }
+    }
 
     this.state.units.set(uId, unit);
     this.updatePlayerPopulation(ownerId);
@@ -1002,13 +1161,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
               const victimOwner = targetUnit.ownerId;
               this.state.units.delete(targetUnit.id);
               this.updatePlayerPopulation(victimOwner);
-              unit.actionState = 'IDLE';
-              unit.targetEntityId = '';
+              this.resumeQueuedWaypoint(unit);
             }
           }
         } else {
-          unit.actionState = 'IDLE';
-          unit.targetEntityId = '';
+          // Target died or changed hands: the order is over.
+          this.resumeQueuedWaypoint(unit);
         }
       } else if (unit.targetEntityType === 'building') {
         const targetBuilding = this.state.buildings.get(unit.targetEntityId);
@@ -1024,13 +1182,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
               const bOwner = targetBuilding.ownerId;
               this.state.buildings.delete(targetBuilding.id);
               this.updatePlayerPopulation(bOwner);
-              unit.actionState = 'IDLE';
-              unit.targetEntityId = '';
+              this.resumeQueuedWaypoint(unit);
             }
           }
         } else {
-          unit.actionState = 'IDLE';
-          unit.targetEntityId = '';
+          // Building destroyed or captured by its owner: order over.
+          this.resumeQueuedWaypoint(unit);
         }
       }
     } else {
@@ -1041,8 +1198,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private processUnitHarvest(unit: UnitState, deltaTime: number) {
     const resource = this.state.resourceNodes.get(unit.targetEntityId);
     if (!resource) {
-      unit.actionState = 'IDLE';
-      unit.targetEntityId = '';
+      this.resumeQueuedWaypoint(unit);
       return;
     }
 
@@ -1067,8 +1223,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
           if (resource.remainingAmount <= 0) {
             this.state.resourceNodes.delete(resource.id);
-            unit.actionState = 'IDLE';
-            unit.targetEntityId = '';
+            this.resumeQueuedWaypoint(unit);
           }
         }
       }

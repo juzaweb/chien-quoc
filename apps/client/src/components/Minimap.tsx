@@ -7,9 +7,11 @@ interface MinimapProps {
   room: Room | null;
   sceneRef?: React.RefObject<WorldScene | null>;
   onPanToGrid: (gx: number, gy: number) => void;
+  /** CTL-07: right-click issues a move order to the grid cell under the cursor. */
+  onCommandAtGrid: (gx: number, gy: number) => void;
 }
 
-export const Minimap: React.FC<MinimapProps> = ({ room, sceneRef, onPanToGrid }) => {
+export const Minimap: React.FC<MinimapProps> = ({ room, sceneRef, onPanToGrid, onCommandAtGrid }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -151,17 +153,40 @@ export const Minimap: React.FC<MinimapProps> = ({ room, sceneRef, onPanToGrid })
     };
   }, [room, sceneRef]);
 
-  const handleMinimapClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  /**
+   * Maps a minimap pointer event to fractional grid coordinates.
+   *
+   * Divides by the rendered rect, not the backing store: the canvas has a 1px
+   * border, so `rect.width` (142) is the real pointer area while `canvas.width`
+   * is 140. Using the backing store shifts every click ~1.4% toward the origin,
+   * which at 220 cells is more than two grid cells of error.
+   */
+  const gridFromEvent = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      gx: ((e.clientX - rect.left) / rect.width) * MAP_GRID_WIDTH,
+      gy: ((e.clientY - rect.top) / rect.height) * MAP_GRID_HEIGHT
+    };
+  };
 
-    const gx = (clickX / canvas.width) * MAP_GRID_WIDTH;
-    const gy = (clickY / canvas.height) * MAP_GRID_HEIGHT;
+  const handleMinimapClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const grid = gridFromEvent(e);
+    if (!grid) return;
+    onPanToGrid(grid.gx, grid.gy);
+  };
 
-    onPanToGrid(gx, gy);
+  /**
+   * CTL-07: right-click orders the selection to that spot instead of panning.
+   * The native context menu is suppressed so the order is the only effect.
+   */
+  const handleMinimapContextMenu = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const grid = gridFromEvent(e);
+    if (!grid) return;
+    onCommandAtGrid(grid.gx, grid.gy);
   };
 
   return (
@@ -174,6 +199,7 @@ export const Minimap: React.FC<MinimapProps> = ({ room, sceneRef, onPanToGrid })
         width={140}
         height={140}
         onClick={handleMinimapClick}
+        onContextMenu={handleMinimapContextMenu}
         className="rounded cursor-crosshair border border-amber-900/50 shadow-inner"
       />
     </div>

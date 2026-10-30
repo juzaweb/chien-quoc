@@ -192,12 +192,29 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             cùng loại
           </div>
           <div>
+            <span className="text-amber-400 font-mono">Shift + Chuột phải</span> xếp nhiều điểm
+            đến liên tiếp (giữ Shift để xem đường đi)
+          </div>
+          <div>
+            <span className="text-amber-400 font-mono">Chọn công trình + Chuột phải</span> đặt
+            điểm tập kết (rally) cho lính mới
+          </div>
+          <div>
+            <span className="text-amber-400 font-mono">Chuột phải trên minimap</span> ra lệnh di
+            chuyển tới đúng chỗ đó (chuột trái để pan camera)
+          </div>
+          <div>
             <span className="text-amber-400 font-mono">Ctrl + 1..9</span> gán nhóm,{' '}
             <span className="text-amber-400 font-mono">1..9</span> gọi lại nhóm
           </div>
           <div>
             <span className="text-amber-400 font-mono">S</span> dừng quân đang chọn tại chỗ
             (huỷ lệnh hiện tại)
+          </div>
+          <div>
+            <span className="text-amber-400 font-mono">.</span> nhảy tới nông dân đang rảnh,{' '}
+            <span className="text-amber-400 font-mono">Ctrl + .</span> nhảy tới lính đang rảnh,{' '}
+            <span className="text-amber-400 font-mono">H</span> về Town Center
           </div>
         </div>
       </div>

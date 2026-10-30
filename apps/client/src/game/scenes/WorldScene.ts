@@ -11,6 +11,7 @@ import {
   TILE_HEIGHT,
   TILE_WIDTH,
   UNIT_BLUEPRINTS,
+  canTrainUnitsAt,
   gridToScreen,
   screenToGrid,
   getIsoDepth,
@@ -122,6 +123,25 @@ export class WorldScene extends Phaser.Scene {
     selectSameType: false
   };
   private lastUnitClick: { unitId: string; at: number } = { unitId: '', at: 0 };
+
+  // CTL-05: while Shift is held, draw the queued waypoint chain of every selected
+  // unit plus the point currently under the pointer. Shift itself is read from a
+  // Key object rather than the pointer event, so the preview also shows up before
+  // the next click.
+  private shiftKey: Phaser.Input.Keyboard.Key | null = null;
+  private waypointGraphics!: Phaser.GameObjects.Graphics;
+  private rallyGraphics!: Phaser.GameObjects.Graphics;
+  /** Signature of the last drawn rally layer, so identical frames skip the redraw. */
+  private rallySignature = '';
+
+  // CTL-04: last unit each idle cycle landed on, so the next press moves on to a
+  // different unit. Tracked by id rather than by list index: the candidate list is
+  // recomputed every press (units go idle/busy, and the roster changes), so a raw
+  // index would point at a different unit or fall out of range between presses.
+  private idleCycleAnchor: { villager: string | null; military: string | null } = {
+    villager: null,
+    military: null
+  };
 
   // React Callbacks
   public onSelectionChange: ((entity: SelectedEntityData | null) => void) | null = null;
@@ -242,6 +262,14 @@ export class WorldScene extends Phaser.Scene {
     this.dragSelectionGraphics = this.add.graphics();
     this.dragSelectionGraphics.setDepth(1000000);
 
+    // 4b. Queued waypoint preview (CTL-05), under the selection ring layer
+    this.waypointGraphics = this.add.graphics();
+    this.waypointGraphics.setDepth(999995);
+
+    // 4c. Rally point flags (CTL-06), below every command overlay
+    this.rallyGraphics = this.add.graphics();
+    this.rallyGraphics.setDepth(999990);
+
     // 5. Camera & Controls
     if (this.input.keyboard) {
       this.cursors = this.input.keyboard.createCursorKeys();
@@ -249,6 +277,10 @@ export class WorldScene extends Phaser.Scene {
       // hotkeys in App.tsx. Panning is arrows + edge scroll (see update()).
       this.bindControlGroupKeys(this.input.keyboard);
       this.bindStopKey(this.input.keyboard);
+      this.bindIdleCycleKeys(this.input.keyboard);
+      this.bindHomeKey(this.input.keyboard);
+      // Held-modifier state for the waypoint preview; not a hotkey.
+      this.shiftKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
     }
 
     // Ctrl+left-click is the same-type selection shortcut (CTL-02). On macOS the
@@ -329,11 +361,12 @@ export class WorldScene extends Phaser.Scene {
     return ownerId === this.mySessionId || (!!this.myPlayerName && ownerId === this.myPlayerName);
   }
 
-  private centerOnOwnBaseIfNeeded() {
-    if (this.hasCenteredOnSpawn || !this.room) return;
-
-    // Player name / sessionId may not be known yet; retry on the next tick instead.
-    if (!this.mySessionId && !this.myPlayerName) return;
+  /**
+   * Own Town Center, or null when the snapshot does not contain it yet. Ownership
+   * matches on sessionId first, then on player name (survives a reconnect).
+   */
+  private findOwnTownCenter(): any | null {
+    if (!this.room) return null;
 
     let target: any = null;
     this.room.state.buildings.forEach((b: any) => {
@@ -341,6 +374,16 @@ export class WorldScene extends Phaser.Scene {
         target = b;
       }
     });
+    return target;
+  }
+
+  private centerOnOwnBaseIfNeeded() {
+    if (this.hasCenteredOnSpawn || !this.room) return;
+
+    // Player name / sessionId may not be known yet; retry on the next tick instead.
+    if (!this.mySessionId && !this.myPlayerName) return;
+
+    const target = this.findOwnTownCenter();
     if (!target) return;
 
     this.hasCenteredOnSpawn = true;
@@ -856,7 +899,7 @@ export class WorldScene extends Phaser.Scene {
       if (this.buildingToPlace) {
         this.cancelBuildingPlacement();
       } else {
-        this.handleRightClickCommand(pointer);
+        this.handleRightClickCommand(pointer, !!native?.shiftKey);
       }
       return;
     }
@@ -1226,6 +1269,97 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * CTL-04: `.` jumps to the next idle villager, `Ctrl + .` to the next idle
+   * military unit. Selection follows the camera, so the jumped-to unit is ready
+   * for an order without a second click.
+   *
+   * Modifiers other than Ctrl are ignored: Shift+. is `>` (reserved for future
+   * layers) and Alt/Cmd combinations belong to the OS or the browser.
+   */
+  private bindIdleCycleKeys(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    keyboard.on('keydown-PERIOD', (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (event.metaKey || event.shiftKey || event.altKey) return;
+      // Placement mode owns the keyboard; stealing the selection mid-placement
+      // would drop the building cursor without telling the player why.
+      if (this.buildingToPlace) return;
+
+      event.preventDefault();
+      this.cycleToIdleUnit(event.ctrlKey ? 'military' : 'villager');
+    });
+  }
+
+  /**
+   * CTL-04: `H` re-centres the camera on this player's Town Center.
+   * Ctrl/Cmd+H are browser shortcuts (history, hide), so those are left alone.
+   */
+  private bindHomeKey(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    keyboard.on('keydown-H', (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+      const townCenter = this.findOwnTownCenter();
+      if (!townCenter) return;
+
+      event.preventDefault();
+      this.panTo(townCenter.gridX + townCenter.sizeX / 2, townCenter.gridY + townCenter.sizeY / 2);
+    });
+  }
+
+  /**
+   * Selects the next idle unit of `category`, wrapping around at the end.
+   *
+   * Only IDLE counts: a unit walking home or harvesting is busy, and jumping to it
+   * would make the hotkey feel random. Nothing is selected when no unit qualifies -
+   * the current selection stays as it was instead of being cleared for no reason.
+   */
+  public cycleToIdleUnit(category: 'villager' | 'military') {
+    if (!this.room) return;
+
+    const idleIds: string[] = [];
+    this.room.state.units.forEach((unit: any, unitId: string) => {
+      if (unit.ownerId !== this.mySessionId) return;
+      if (unit.actionState !== 'IDLE') return;
+      const isVillager = unit.type === 'VILLAGER';
+      if (category === 'villager' ? !isVillager : isVillager) return;
+      idleIds.push(unitId);
+    });
+    if (idleIds.length === 0) return;
+
+    // Colyseus preserves insertion order, which is stable across snapshots, but an
+    // explicit sort keeps the cycle predictable regardless of snapshot timing.
+    idleIds.sort();
+
+    const anchor = this.idleCycleAnchor[category];
+    const anchorIndex = anchor ? idleIds.indexOf(anchor) : -1;
+    const nextId = idleIds[(anchorIndex + 1) % idleIds.length];
+    this.idleCycleAnchor[category] = nextId;
+
+    this.focusUnit(nextId);
+  }
+
+  /** Selects exactly one unit and pans the camera onto it. */
+  private focusUnit(unitId: string) {
+    this.clearSelection();
+    this.addUnitToSelection(unitId);
+    this.notifySelectionChange();
+
+    const container = this.unitSprites.get(unitId);
+    const unit = this.room?.state.units.get(unitId);
+    // Sprite position lerps toward the server position, so it is the visually
+    // correct target; fall back to the snapshot when the sprite is not built yet.
+    const pos = container
+      ? { x: container.x, y: container.y }
+      : unit
+        ? gridToScreen(unit.x, unit.y)
+        : null;
+    if (!pos) return;
+
+    this.cameras.main.pan(pos.x, pos.y, 350, 'Power2');
+    this.showCommandFeedback(pos.x, pos.y, 0x22d3ee);
+  }
+
   private groupControlGroup(index: number) {
     const ids = new Set<string>();
     this.selectedUnitIds.forEach((unitId) => {
@@ -1270,8 +1404,23 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private handleRightClickCommand(pointer: Phaser.Input.Pointer) {
-    if (!this.room || this.selectedUnitIds.size === 0) return;
+  /**
+   * Resolves a right-click into one order for the current selection.
+   *
+   * @param queue Shift is held: ground clicks append a waypoint to the unit's
+   *   path instead of replacing the order (CTL-05). Entity targets still issue
+   *   their normal order — attack/harvest have no queue model on the server, and
+   *   a half-queued attack would be worse than a plain one.
+   */
+  private handleRightClickCommand(pointer: Phaser.Input.Pointer, queue = false) {
+    if (!this.room) return;
+
+    // CTL-06: with no unit selected, a right-click on the map sets the rally
+    // point of the selected own building instead of doing nothing.
+    if (this.selectedUnitIds.size === 0) {
+      this.handleSetRallyPointCommand(pointer);
+      return;
+    }
 
     const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
     const targetGrid = screenToGrid(worldPoint.x, worldPoint.y);
@@ -1353,9 +1502,118 @@ export class WorldScene extends Phaser.Scene {
     this.room.send(NetworkMessage.MOVE_UNITS, {
       unitIds: Array.from(this.selectedUnitIds),
       targetGridX: targetGrid.gridX,
-      targetGridY: targetGrid.gridY
+      targetGridY: targetGrid.gridY,
+      ...(queue ? { queue: true } : {})
     });
     this.showCommandFeedback(worldPoint.x, worldPoint.y, 0x22c55e);
+  }
+
+  /**
+   * CTL-07: issues a plain move order to `gridX, gridY` for the current
+   * selection. Used by the minimap, which has no pointer over the world, so it
+   * cannot reuse `handleRightClickCommand`.
+   *
+   * Mirrors the ground branch of `handleRightClickCommand` — same message, same
+   * payload, no queue flag — because the minimap has no Shift modifier to read.
+   * Does nothing while placing a building (placement owns the input) and with no
+   * unit selected (a building-only selection must not be turned into a move).
+   * Coordinates are clamped here as well as on the server: a click on the very
+   * edge of the minimap can land exactly on the map size.
+   */
+  public commandMoveTo(gridX: number, gridY: number) {
+    if (!this.room) return;
+    if (this.buildingToPlace) return;
+    if (this.selectedUnitIds.size === 0) return;
+
+    const targetGridX = Math.max(0, Math.min(MAP_GRID_WIDTH - 1, Math.round(gridX)));
+    const targetGridY = Math.max(0, Math.min(MAP_GRID_HEIGHT - 1, Math.round(gridY)));
+
+    this.room.send(NetworkMessage.MOVE_UNITS, {
+      unitIds: Array.from(this.selectedUnitIds),
+      targetGridX,
+      targetGridY
+    });
+
+    const screenPos = gridToScreen(targetGridX, targetGridY);
+    this.showCommandFeedback(screenPos.x, screenPos.y, 0x22c55e);
+  }
+
+  /**
+   * CTL-06: turns a right-click into a rally order for the selected building.
+   *
+   * Silently does nothing when the selection is not exactly one own building that
+   * can train — right-clicking empty terrain with nothing selected must not spam
+   * the server, and a House cannot hold a rally point. Out-of-map clicks are
+   * dropped client-side too, so the common misclick never costs a round-trip.
+   */
+  private handleSetRallyPointCommand(pointer: Phaser.Input.Pointer) {
+    if (!this.room || !this.selectedBuildingId) return;
+
+    const building = this.room.state.buildings.get(this.selectedBuildingId);
+    if (!building || !this.isOwnBuilding(building.ownerId)) return;
+    if (!canTrainUnitsAt(building.type as BuildingType)) return;
+
+    const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
+    const grid = screenToGrid(worldPoint.x, worldPoint.y);
+    if (grid.gridX < 0 || grid.gridY < 0 || grid.gridX >= MAP_GRID_WIDTH || grid.gridY >= MAP_GRID_HEIGHT) {
+      return;
+    }
+
+    this.room.send(NetworkMessage.SET_RALLY_POINT, {
+      buildingId: this.selectedBuildingId,
+      gridX: grid.gridX,
+      gridY: grid.gridY
+    });
+    this.showCommandFeedback(worldPoint.x, worldPoint.y, 0x38bdf8);
+  }
+
+  /**
+   * CTL-06: draws a flag on every own building's rally point plus a faint line
+   * back to the building it belongs to.
+   *
+   * Runs from update(), so the frame-to-frame cost is what matters: the flags are
+   * collected first and only redrawn when the collected signature actually
+   * changed (a rally point moved, a building appeared or was destroyed). Rally
+   * changes arrive as state patches from other clients too, so a signature beats
+   * tracking individual patches.
+   */
+  private updateRallyMarkers() {
+    const markers: { id: string; rallyX: number; rallyY: number }[] = [];
+
+    if (this.room) {
+      this.room.state.buildings.forEach((b: any) => {
+        if (!this.isOwnBuilding(b.ownerId)) return;
+        if (!(b.rallyX >= 0 && b.rallyY >= 0)) return;
+        if (!this.buildingSprites.get(b.id)) return;
+        markers.push({ id: b.id, rallyX: b.rallyX, rallyY: b.rallyY });
+      });
+    }
+
+    const signature = markers.map((m) => `${m.id}:${m.rallyX},${m.rallyY}`).join('|');
+    if (signature === this.rallySignature) return;
+    this.rallySignature = signature;
+
+    this.rallyGraphics.clear();
+
+    markers.forEach((m) => {
+      const container = this.buildingSprites.get(m.id);
+      if (!container) return;
+
+      const flag = gridToScreen(m.rallyX, m.rallyY);
+      const marker = this.rallyGraphics;
+
+      marker.lineStyle(1, 0x38bdf8, 0.3);
+      marker.lineBetween(container.x, container.y, flag.x, flag.y);
+
+      marker.fillStyle(0x0f172a, 0.55);
+      marker.fillEllipse(flag.x, flag.y, 22, 11);
+
+      // Pole and a triangle pennant pointing left.
+      marker.lineStyle(2, 0xe2e8f0, 0.9);
+      marker.lineBetween(flag.x, flag.y, flag.x, flag.y - 34);
+      marker.fillStyle(0x38bdf8, 0.95);
+      marker.fillTriangle(flag.x, flag.y - 34, flag.x, flag.y - 20, flag.x - 16, flag.y - 27);
+    });
   }
 
   /**
@@ -1380,6 +1638,56 @@ export class WorldScene extends Phaser.Scene {
 
     if (pointer.y <= EDGE_SCROLL_SIZE_PX) cam.scrollY -= cameraSpeed;
     else if (pointer.y >= height - EDGE_SCROLL_SIZE_PX) cam.scrollY += cameraSpeed;
+  }
+
+  /**
+   * CTL-05: while Shift is held, draws the pending path of every selected unit —
+   * current position, the order it is executing, then each queued waypoint, and
+   * finally the point under the pointer. Purely cosmetic: it reads the snapshot
+   * and never mutates an order.
+   */
+  private updateWaypointPreview() {
+    this.waypointGraphics.clear();
+    if (!this.room || !this.shiftKey?.isDown) return;
+    if (this.buildingToPlace || this.selectedUnitIds.size === 0) return;
+
+    const worldPoint = this.input.activePointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
+    const line = this.waypointGraphics;
+    line.lineStyle(2, 0xfde68a, 0.55);
+
+    this.selectedUnitIds.forEach((unitId) => {
+      const unit = this.room?.state.units.get(unitId);
+      const container = this.unitSprites.get(unitId);
+      if (!unit || !container || unit.ownerId !== this.mySessionId) return;
+
+      const points: { x: number; y: number }[] = [{ x: container.x, y: container.y }];
+      if (unit.actionState === 'MOVING') {
+        points.push(gridToScreen(unit.targetX, unit.targetY));
+      }
+
+      const queueX = unit.queueTargetX as ArrayLike<number> | undefined;
+      const queueY = unit.queueTargetY as ArrayLike<number> | undefined;
+      if (queueX && queueY) {
+        const count = Math.min(queueX.length, queueY.length);
+        for (let i = 0; i < count; i++) {
+          points.push(gridToScreen(queueX[i], queueY[i]));
+        }
+      }
+
+      points.push({ x: worldPoint.x, y: worldPoint.y });
+
+      line.beginPath();
+      line.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        line.lineTo(points[i].x, points[i].y);
+      }
+      line.strokePath();
+
+      // Ring every committed waypoint; the pointer end stays unmarked.
+      for (let i = 1; i < points.length - 1; i++) {
+        line.strokeCircle(points[i].x, points[i].y, 5);
+      }
+    });
   }
 
   private showCommandFeedback(x: number, y: number, color: number) {
@@ -1665,6 +1973,9 @@ export class WorldScene extends Phaser.Scene {
     if (this.cursors.down.isDown) this.cameras.main.scrollY += cameraSpeed;
 
     this.applyEdgeScroll(cameraSpeed);
+
+    this.updateWaypointPreview();
+    this.updateRallyMarkers();
 
     // Smooth unit position interpolation (Lerp)
     this.unitTargetPositions.forEach((target, unitId) => {
