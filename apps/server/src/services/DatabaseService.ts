@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { PrismaClient } from '@prisma/client';
@@ -6,33 +7,89 @@ import { PlayerState } from '../schema/PlayerState.js';
 import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
+import { DATABASE_SCHEMA_STATEMENTS } from './databaseSchema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const dbPath = path.resolve(__dirname, '../../prisma/dev.db');
+
+/**
+ * Resolves to `apps/server/database` from both `src/services` (tsx) and
+ * `dist/services` (compiled). The directory is created on boot when missing.
+ */
+export const DATABASE_DIR = path.resolve(__dirname, '../../database');
+export const DATABASE_FILE = path.join(DATABASE_DIR, 'dev.db');
 
 export const prisma = new PrismaClient({
   datasources: {
     db: {
-      url: `file:${dbPath}`
+      url: `file:${DATABASE_FILE}`
     }
   }
 });
 
 export class DatabaseService {
-  private static isInitialized = false;
+  private static initPromise: Promise<void> | null = null;
   private static isSaving = false;
 
-  public static async initialize() {
-    if (this.isInitialized) return;
-    try {
-      // Enable WAL mode in SQLite for concurrent reads and writes
-      await prisma.$queryRawUnsafe('PRAGMA journal_mode = WAL;');
-      this.isInitialized = true;
-      console.log('📦 [DatabaseService] SQLite database connected with WAL mode enabled.');
-    } catch (err) {
-      console.error('❌ [DatabaseService] Initialization error:', err);
+  /**
+   * Creates the schema and enables WAL. Concurrent callers share one in-flight
+   * promise, and failures are rethrown so the server refuses to start on a
+   * broken database.
+   */
+  public static async initialize(): Promise<void> {
+    if (!this.initPromise) {
+      this.initPromise = this.bootstrap().catch((err) => {
+        // Allow a later retry instead of caching a rejected promise forever.
+        this.initPromise = null;
+        throw err;
+      });
     }
+    return this.initPromise;
+  }
+
+  private static async bootstrap(): Promise<void> {
+    // Create the directory + empty file first so Prisma opens a brand-new DB
+    // instead of failing with "unable to open database file".
+    this.ensureDatabaseFile();
+
+    // Create the schema on a brand-new database file (idempotent DDL).
+    await this.ensureSchema();
+
+    // Enable WAL mode in SQLite for concurrent reads and writes
+    await prisma.$queryRawUnsafe('PRAGMA journal_mode = WAL;');
+    console.log('📦 [DatabaseService] SQLite database connected with WAL mode enabled.');
+  }
+
+  /**
+   * Creates the database directory and an empty SQLite file when they are missing,
+   * so a fresh clone (or a deleted `database/` folder) starts without extra setup.
+   */
+  private static ensureDatabaseFile(): void {
+    fs.mkdirSync(DATABASE_DIR, { recursive: true });
+
+    if (fs.existsSync(DATABASE_FILE)) {
+      return;
+    }
+
+    // Touch the file so Prisma opens a brand-new database instead of failing.
+    fs.closeSync(fs.openSync(DATABASE_FILE, 'a'));
+    console.log(`🗄️  [DatabaseService] Created new SQLite database at ${DATABASE_FILE}`);
+  }
+
+  /**
+   * Creates all tables/indexes when they are missing. Safe to run on every boot.
+   */
+  private static async ensureSchema() {
+    for (const statement of DATABASE_SCHEMA_STATEMENTS) {
+      await prisma.$executeRawUnsafe(statement);
+    }
+  }
+
+  /**
+   * Closes the Prisma connection so the process can exit cleanly.
+   */
+  public static async disconnect(): Promise<void> {
+    await prisma.$disconnect();
   }
 
   /**

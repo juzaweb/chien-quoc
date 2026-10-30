@@ -1,6 +1,8 @@
 datasource db {
   provider = "sqlite"
-  url      = env("DATABASE_URL")
+  // Relative to this schema file: apps/server/database/dev.db
+  // The server creates this file + schema on boot when it is missing.
+  url      = "file:../database/dev.db"
 }
 
 generator client {

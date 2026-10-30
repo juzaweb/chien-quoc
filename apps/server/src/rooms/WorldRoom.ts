@@ -42,6 +42,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private attackTimers: Map<string, number> = new Map();
   private harvestTimers: Map<string, number> = new Map();
   private readyPromise: Promise<void> | null = null;
+  private worldRestoreError: Error | null = null;
 
   onCreate(options: any) {
     this.setState(new WorldState());
@@ -160,7 +161,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.state.buildings.forEach((b) => this.bumpEntityId(b.id));
       this.state.units.forEach((u) => this.bumpEntityId(u.id));
     } catch (err) {
+      // Record instead of rethrowing: a rejected readyPromise would surface as an
+      // unhandled rejection. onJoin aborts the join when this is set.
       console.error('❌ [WorldRoom] Failed to initialize persistence:', err);
+      this.worldRestoreError = err instanceof Error ? err : new Error(String(err));
     }
   }
 
@@ -358,6 +362,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       // Otherwise state.buildings is empty and we would spawn a duplicate base.
       if (this.readyPromise) {
         await this.readyPromise;
+      }
+      if (this.worldRestoreError) {
+        // Abort instead of falling through to "no empire found" and spawning a
+        // duplicate starter base on top of the (still persisted) saved empire.
+        throw new Error(`World restore failed: ${this.worldRestoreError.message}`);
       }
 
       // Check if player profile already exists in Database

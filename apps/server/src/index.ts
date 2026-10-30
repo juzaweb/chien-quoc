@@ -4,6 +4,7 @@ import cors from 'cors';
 import { Server, matchMaker } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import { WorldRoom } from './rooms/WorldRoom.js';
+import { DatabaseService } from './services/DatabaseService.js';
 
 const port = Number(process.env.PORT || 2567);
 const app = express();
@@ -46,18 +47,29 @@ app.all('/matchmake/:method/:param?', async (req, res) => {
   }
 });
 
-const server = http.createServer(app);
+async function start() {
+  // Ensure the SQLite file, folder and tables exist before accepting traffic.
+  // initialize() throws on failure, so the server never starts on a broken DB.
+  await DatabaseService.initialize();
 
-const gameServer = new Server({
-  transport: new WebSocketTransport({
-    server
-  })
-});
+  const server = http.createServer(app);
 
-// Define persistent world room
-gameServer.define('world_room', WorldRoom);
+  const gameServer = new Server({
+    transport: new WebSocketTransport({
+      server
+    })
+  });
 
-// Start game server
-gameServer.listen(port).then(() => {
+  // Define persistent world room
+  gameServer.define('world_room', WorldRoom);
+
+  await gameServer.listen(port);
   console.log(`⚔️  Chien Quoc Game Server is running on http://localhost:${port} and ws://localhost:${port}`);
+}
+
+start().catch(async (err) => {
+  console.error('❌ [Server] Failed to start:', err);
+  // Close the SQLite connection so the process can exit without hanging handles.
+  await DatabaseService.disconnect().catch(() => undefined);
+  process.exit(1);
 });

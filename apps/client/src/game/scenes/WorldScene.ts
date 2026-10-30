@@ -36,6 +36,7 @@ export class WorldScene extends Phaser.Scene {
   public mySessionId: string = '';
   public myPlayerName: string = '';
   private boundRoomId: string = '';
+  private eventsBoundRoom: Room | null = null;
 
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasdKeys!: { [key: string]: Phaser.Input.Keyboard.Key };
@@ -240,17 +241,25 @@ export class WorldScene extends Phaser.Scene {
   }
 
   public setRoom(room: Room) {
-    const isNewRoom = room.roomId !== this.boundRoomId;
+    // Same instance = nothing to wire up. React StrictMode and Phaser's 'ready'
+    // event can both call this with the same object.
+    if (room === this.room) return;
+
+    // Same roomId but a different Room instance means a reconnect: ownership and
+    // sessionId must be refreshed, but the world snapshot itself is unchanged.
+    const isNewWorld = room.roomId !== this.boundRoomId;
+
     this.room = room;
     this.mySessionId = room.sessionId;
     this.boundRoomId = room.roomId;
 
-    // A fresh room means a fresh world snapshot: allow re-centering on the base.
-    if (isNewRoom) {
+    if (isNewWorld) {
+      // Fresh world snapshot: allow re-centering on the base.
       this.hasCenteredOnSpawn = false;
       this.centerAttempts = 0;
     }
 
+    // Callbacks belong to a Room instance, so a new instance always needs binding.
     if (this.scene.isActive()) {
       this.bindRoomEvents(room);
       this.centerOnOwnBaseIfNeeded();
@@ -295,7 +304,10 @@ export class WorldScene extends Phaser.Scene {
    * Town Center arrives in a snapshot after the initial onAdd burst.
    */
   private retryCenterOnBase() {
-    if (this.hasCenteredOnSpawn) return;
+    // Don't burn the retry budget while still in the lobby (no room yet) — the
+    // player can sit there for minutes before joining.
+    if (this.hasCenteredOnSpawn || !this.room) return;
+
     if (this.centerAttempts++ > 300) {
       this.hasCenteredOnSpawn = true; // give up, keep the default camera position
       return;
@@ -304,6 +316,11 @@ export class WorldScene extends Phaser.Scene {
   }
 
   public bindRoomEvents(room: Room) {
+    // Called from create(), setRoom() and PhaserGame effects; binding the same
+    // Room twice would register duplicate schema callbacks (duplicate sprites).
+    if (this.eventsBoundRoom === room) return;
+    this.eventsBoundRoom = room;
+
     const cb = Callbacks.get(room);
 
     // 1. Synchronize Resource Nodes
