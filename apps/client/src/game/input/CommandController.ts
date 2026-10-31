@@ -21,6 +21,19 @@ const CONTROL_GROUP_KEYS = ['ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN
 const CONTROL_GROUP_RECALL_DOUBLE_MS = 300;
 
 /**
+ * `Q/W/E/R/T` start a placement, mirroring the HUD's build buttons in the same
+ * order. The keyboard layer owns them so every hotkey lives in one place; the
+ * scene forwards the choice to React, which owns the "currently placing" state.
+ */
+const BUILDING_HOTKEYS: Array<{ key: string; type: BuildingType }> = [
+  { key: 'Q', type: 'TOWN_CENTER' },
+  { key: 'W', type: 'BARRACKS' },
+  { key: 'E', type: 'HOUSE' },
+  { key: 'R', type: 'FARM' },
+  { key: 'T', type: 'TOWER' }
+];
+
+/**
  * CMD-04b: minimum gap between two handled `Delete` presses, in milliseconds.
  * Phaser re-emits `keydown-<KEY>` every frame while a key is held down, so this
  * is what keeps one press to one command.
@@ -49,6 +62,7 @@ export class CommandController {
 
   private lastOrderKey: { mode: OrderMode | ''; at: number } = { mode: '', at: 0 };
   private lastCancelKeyAt = 0;
+  private lastEscapeAt = 0;
   private controlGroups: Map<number, Set<string>> = new Map();
   private lastGroupRecall: { index: number; at: number } = { index: 0, at: 0 };
 
@@ -88,6 +102,8 @@ export class CommandController {
     this.bindHomeKey(keyboard);
     this.bindCancelKey(keyboard);
     this.bindOrderKeys(keyboard);
+    this.bindBuildingKeys(keyboard);
+    this.bindEscapeKey(keyboard);
     // Held-modifier state for the waypoint preview; not a hotkey.
     this.shiftKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
   }
@@ -198,6 +214,68 @@ export class CommandController {
 
     keyboard.on('keydown-A', arm('ATTACK_MOVE'));
     keyboard.on('keydown-P', arm('PATROL'));
+  }
+
+  /**
+   * `Q/W/E/R/T` open a build placement, the same five the HUD offers.
+   *
+   * This used to live in a `window` keydown listener inside `App.tsx`, which had
+   * no modifier guard: `Ctrl+W` closed the tab and still started a Barracks.
+   * Routing it through Phaser gives every hotkey one owner, and any modifier now
+   * disqualifies the press (Ctrl/Cmd/Shift/Alt belong to the browser, the OS or a
+   * future hotkey layer).
+   */
+  private bindBuildingKeys(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    BUILDING_HOTKEYS.forEach(({ key, type }) => {
+      keyboard.on(`keydown-${key}`, (event: KeyboardEvent) => {
+        if (event.repeat) return;
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        // Already placing this one: Phaser re-emits while the key is held, and
+        // re-entering the same mode would only reset the ghost.
+        if (this.scene.buildingToPlace === type) return;
+
+        event.preventDefault();
+        this.scene.onBuildingHotkey?.(type);
+      });
+    });
+  }
+
+  /**
+   * `Escape` gives up placement first, then the selection — the order the React
+   * listener used before it moved here.
+   *
+   * The re-emit guard is the same one the cancel key needs: a held Escape fires
+   * every frame, and each extra press would cancel something further down the
+   * stack.
+   */
+  private bindEscapeKey(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    keyboard.on('keydown-ESC', (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+
+      const now = performance.now();
+      if (now - this.lastEscapeAt < CANCEL_KEY_DEBOUNCE_MS) return;
+
+      if (this.scene.buildingToPlace) {
+        this.lastEscapeAt = now;
+        event.preventDefault();
+        this.scene.cancelBuildingPlacement();
+        return;
+      }
+
+      const hasSelection =
+        this.scene.selectedUnitIds.size > 0 ||
+        this.scene.selectedBuildingId !== null ||
+        this.scene.selectedResourceId !== null;
+      if (!hasSelection) return;
+
+      this.lastEscapeAt = now;
+      event.preventDefault();
+      // `clear()` drops an armed order as well; React learns about the empty
+      // selection through the same callback the pointer uses.
+      this.scene.clearSelection();
+      this.scene.notifySelectionChange();
+    });
   }
 
   /**

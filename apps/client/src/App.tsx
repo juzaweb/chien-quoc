@@ -173,34 +173,10 @@ export const App: React.FC = () => {
     setAuthUser(null);
   };
 
-  // Keyboard hotkeys
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isJoined) return;
-
-      if (e.key === 'Escape') {
-        if (activeBuildingType) {
-          handleCancelBuilding();
-        } else if (sceneRef.current) {
-          sceneRef.current.clearSelection();
-          setSelectedEntity(null);
-        }
-      } else if (e.key === 'q' || e.key === 'Q') {
-        handleSelectBuilding('TOWN_CENTER');
-      } else if (e.key === 'w' || e.key === 'W') {
-        handleSelectBuilding('BARRACKS');
-      } else if (e.key === 'e' || e.key === 'E') {
-        handleSelectBuilding('HOUSE');
-      } else if (e.key === 'r' || e.key === 'R') {
-        handleSelectBuilding('FARM');
-      } else if (e.key === 't' || e.key === 'T') {
-        handleSelectBuilding('TOWER');
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isJoined, activeBuildingType]);
+  // Keyboard hotkeys live in the Phaser input layer (see CommandController):
+  // `S`, `A`/`P`, `H`, `.`, Delete, `Ctrl+1..9`, `Q/W/E/R/T` and Escape all route
+  // through one place that guards modifiers and Phaser's key re-emit. React only
+  // receives the two things it owns: the selection and the building being placed.
 
   const handleSelectBuilding = (type: BuildingType) => {
     setActiveBuildingType(type);
@@ -261,6 +237,7 @@ export const App: React.FC = () => {
           playerName={playerName}
           onSelectionChange={(entity) => setSelectedEntity(entity)}
           onPlacementCancelled={() => setActiveBuildingType(null)}
+          onBuildingHotkey={handleSelectBuilding}
           gameRef={gameRef}
           sceneRef={sceneRef}
         />

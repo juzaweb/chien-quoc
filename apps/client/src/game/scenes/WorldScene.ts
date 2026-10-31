@@ -117,6 +117,12 @@ export class WorldScene extends Phaser.Scene {
   // React Callbacks
   public onSelectionChange: ((entity: SelectedEntityData | null) => void) | null = null;
   public onPlacementCancelled: (() => void) | null = null;
+  /**
+   * Set by `PhaserGame`. A build hotkey (`Q/W/E/R/T`) is owned by the keyboard
+   * layer but has to open React state, because the HUD highlights the selected
+   * building type and the placement panel reads it.
+   */
+  public onBuildingHotkey: ((type: BuildingType) => void) | null = null;
 
   // Behaviour modules. Constructed in create() so they can allocate Phaser
   // objects; every one of them reads this scene's state rather than keeping a copy.

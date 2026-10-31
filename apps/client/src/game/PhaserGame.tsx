@@ -9,6 +9,8 @@ interface PhaserGameProps {
   playerName: string;
   onSelectionChange: (entity: SelectedEntityData | null) => void;
   onPlacementCancelled: () => void;
+  /** A build hotkey (`Q/W/E/R/T`) was pressed; opens React's placement state. */
+  onBuildingHotkey: (type: BuildingType) => void;
   gameRef: React.MutableRefObject<Phaser.Game | null>;
   sceneRef: React.MutableRefObject<WorldScene | null>;
 }
@@ -18,6 +20,7 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
   playerName,
   onSelectionChange,
   onPlacementCancelled,
+  onBuildingHotkey,
   gameRef,
   sceneRef
 }) => {
@@ -25,8 +28,10 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
   // Latest props for the one-time Phaser bootstrap closure
   const playerNameRef = useRef(playerName);
   const roomRef = useRef(room);
+  const onBuildingHotkeyRef = useRef(onBuildingHotkey);
   playerNameRef.current = playerName;
   roomRef.current = room;
+  onBuildingHotkeyRef.current = onBuildingHotkey;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -82,6 +87,9 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
         sceneRef.current = scene;
         scene.onSelectionChange = onSelectionChange;
         scene.onPlacementCancelled = onPlacementCancelled;
+        // Read through a ref: the scene outlives every React render, and this
+        // bootstrap closure only runs once.
+        scene.onBuildingHotkey = (type) => onBuildingHotkeyRef.current(type);
 
         // Dev-only handle so browser tests can inspect state that the React HUD
         // does not expose (selection sets, camera, sprites).

@@ -260,7 +260,8 @@ export class SelectionController {
   /** Drops every selected unit, building and resource. */
   clear() {
     const scene = this.scene;
-    // Escape routes through here (App.tsx), so an armed order is dropped too.
+    // Escape (see CommandController) and every pointer clear route through here,
+    // so an armed order is dropped too.
     scene.commands.cancelPendingOrder();
 
     scene.selectedUnitIds.forEach((uId) => {
