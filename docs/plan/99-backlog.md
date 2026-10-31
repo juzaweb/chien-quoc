@@ -51,7 +51,6 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 - **Client prediction** cho lệnh move (hiện chờ snapshot → cảm giác trễ ~50ms).
 - **Snapshot diff / interpolation** mượt hơn — hiện `Phaser.Math.Linear(..., 0.25)` cố định,
   không phụ thuộc delta → tốc độ lerp thay đổi theo FPS.
-- **Giới hạn 200 population** (`MAX_POPULATION_LIMIT` đã có trong shared, chưa enforce).
 - **Unit collision** — lính hiện chồng lên nhau hoàn toàn.
 - **Fog of war** — chưa có khái niệm tầm nhìn.
 - **Preview Shift không phản ánh `MAX_QUEUED_WAYPOINTS`** — quá 12 điểm thì server lặng lẽ
@@ -68,15 +67,9 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
   vì các lệnh đó idempotent (`STOP_UNITS`/select lại cùng unit thì kết quả như cũ), nhưng
   nên rà một lượt: thêm một helper dùng chung (timestamp debounce hoặc
   `Phaser.Input.Keyboard.JustDown` trên `Key` object) thay vì mỗi `bind*` tự xử lý.
-- **Pathfinding không tự tính lại khi có vật cản mới** — path chỉ tính lúc ra lệnh; đặt nhà
-  lên đường đi của một unit đang trên đường thì nó đi xuyên qua nhà đó cho tới đích. Cần
-  kiểm tra ô kế tiếp mỗi tick và xin path mới khi bị chặn (hoặc dùng hàng đợi path có sẵn).
 - **Path không lưu vào SQLite** — sau restart, unit đang `MOVING` được khôi phục với
   `targetX/targetY` cũ nhưng `pathX/pathY` rỗng nên đi thẳng. Chấp nhận được, nhưng nếu
   muốn đúng thì lưu thêm hoặc tính lại path lúc restore.
-- **Chưa hiện tài nguyên đang mang trên client** — SIM-02 đã có `carryingAmount` /
-  `carryingResourceType` trong schema nhưng HUD/đầu dân chưa vẽ icon; người chơi không biết
-  dân đang mang gì cho tới khi tài nguyên nhảy số ở TC.
 - **Chưa có Mill / Lumber Camp / Mining Camp** — `BuildingBlueprint.dropOffs` đã hỗ trợ
   nhưng hiện chỉ TOWN_CENTER nhận tài nguyên, nên mọi chuyến hàng đều đi về TC và kinh tế
   chậm hơn AoE ở các mỏ xa.

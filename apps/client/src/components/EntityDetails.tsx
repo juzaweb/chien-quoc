@@ -7,7 +7,15 @@ import {
   UNIT_BLUEPRINTS,
   UnitType
 } from '@chien-quoc/shared';
-import { Shield, Swords, UserPlus, Heart, Hammer, X } from 'lucide-react';
+import { Shield, Swords, UserPlus, Heart, Hammer, X, Boxes } from 'lucide-react';
+
+/** Vietnamese labels for the resource types a villager can haul. */
+const RESOURCE_LABELS: Record<string, string> = {
+  wood: 'Gỗ',
+  food: 'Thức ăn',
+  gold: 'Vàng',
+  stone: 'Đá'
+};
 
 interface EntityDetailsProps {
   entity: SelectedEntityData | null;
@@ -109,6 +117,18 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
               style={{ width: `${Math.max(0, Math.min(100, (entity.hp / entity.maxHp) * 100))}%` }}
             />
           </div>
+        </div>
+      )}
+
+      {/* SIM-02: what this villager is hauling right now */}
+      {entity.type === 'unit' && (entity.carryingAmount ?? 0) > 0 && (
+        <div className="flex items-center justify-between text-[11px] text-slate-300" data-carrying>
+          <span className="flex items-center gap-1">
+            <Boxes size={12} className="text-amber-400" /> Đang mang
+          </span>
+          <span className="font-mono text-amber-300 font-bold">
+            {entity.carryingAmount} {RESOURCE_LABELS[entity.carryingResourceType ?? ''] ?? entity.carryingResourceType}
+          </span>
         </div>
       )}
 

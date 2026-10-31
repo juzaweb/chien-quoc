@@ -46,6 +46,12 @@ export interface SelectedEntityData {
   constructionProgress?: number;
   remainingAmount?: number;
   maxAmount?: number;
+  /**
+   * SIM-02: what a villager is hauling right now. Shown in the entity panel so
+   * the player can see a load without waiting for the stockpile to jump.
+   */
+  carryingAmount?: number;
+  carryingResourceType?: string;
 }
 
 /**
@@ -123,6 +129,8 @@ export class WorldScene extends Phaser.Scene {
    * building type and the placement panel reads it.
    */
   public onBuildingHotkey: ((type: BuildingType) => void) | null = null;
+  /** Last `hp|carrying|actionState` string published to the entity panel. */
+  private lastUnitDetailSignature = '';
 
   // Behaviour modules. Constructed in create() so they can allocate Phaser
   // objects; every one of them reads this scene's state rather than keeping a copy.
@@ -623,7 +631,9 @@ export class WorldScene extends Phaser.Scene {
           subType: unit.type,
           hp: unit.hp,
           maxHp: unit.maxHp,
-          isOwner: unit.ownerId === this.mySessionId
+          isOwner: unit.ownerId === this.mySessionId,
+          carryingAmount: unit.carryingAmount,
+          carryingResourceType: unit.carryingResourceType
         });
         return;
       }
@@ -742,5 +752,30 @@ export class WorldScene extends Phaser.Scene {
         }
       }
     });
+
+    this.syncSelectedUnitDetails();
+  }
+
+  /**
+   * Re-publishes the entity panel while a single unit is selected and something
+   * the panel shows has changed (hp, the load it is hauling, its action).
+   *
+   * The panel used to be published on selection changes only, so a villager's
+   * `carryingAmount` and a unit's hp went stale the moment they moved. The
+   * signature keeps the React update to actual value changes instead of one
+   * render per frame.
+   */
+  private syncSelectedUnitDetails() {
+    if (this.selectedUnitIds.size !== 1) return;
+
+    const unitId = Array.from(this.selectedUnitIds)[0];
+    const unit = this.room?.state.units.get(unitId);
+    if (!unit) return;
+
+    const signature = `${unit.hp}|${unit.carryingAmount}|${unit.carryingResourceType}|${unit.actionState}`;
+    if (signature === this.lastUnitDetailSignature) return;
+
+    this.lastUnitDetailSignature = signature;
+    this.notifySelectionChange();
   }
 }

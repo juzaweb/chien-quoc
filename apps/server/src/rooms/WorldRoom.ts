@@ -5,6 +5,7 @@ import {
   BUILDING_BLUEPRINTS,
   BuildingType,
   INITIAL_POPULATION_CAP,
+  MAX_POPULATION_LIMIT,
   MAP_GRID_HEIGHT,
   MAP_GRID_WIDTH,
   NetworkMessage,
@@ -68,6 +69,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.combatSystem ??= new CombatSystem(this.state, {
       resumeQueuedWaypoint: (unit) => this.movement.resumeQueuedWaypoint(unit),
       forgetEconomyState: (unitId) => this.economy.forgetUnit(unitId),
+      forgetMovementState: (unitId) => this.movement.forgetUnit(unitId),
       updatePlayerPopulation: (ownerId) => this.updatePlayerPopulation(ownerId)
     });
     return this.combatSystem;
@@ -808,6 +810,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         this.combat.endAttackOrder(unit);
       }
 
+      // SIM-01 follow-up: a route computed before a building appeared runs
+      // straight through it, so a blocked next tile drops the route and asks for
+      // a new one before the unit takes the step.
+      this.movement.refreshRouteIfBlocked(unit);
+
       // Movement handling
       if (
         unit.actionState === 'MOVING' ||
@@ -974,7 +981,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     });
 
     player.population = unitCount;
-    player.populationCap = Math.min(200, totalCap);
+    player.populationCap = Math.min(MAX_POPULATION_LIMIT, totalCap);
   }
 
   async onLeave(client: Client, code?: number) {

@@ -18,6 +18,8 @@ export interface CombatPorts {
   resumeQueuedWaypoint(unit: UnitState): void;
   /** Drops transient per-unit state owned by another system (economy). */
   forgetEconomyState(unitId: string): void;
+  /** Drops transient per-unit state owned by the movement system. */
+  forgetMovementState(unitId: string): void;
   /** Recomputed when a unit is removed from the world. */
   updatePlayerPopulation(ownerId: string): void;
 }
@@ -217,6 +219,7 @@ export class CombatSystem {
     this.state.units.delete(victim.id);
     this.forgetUnit(victim.id);
     this.ports.forgetEconomyState(victim.id);
+    this.ports.forgetMovementState(victim.id);
     this.ports.updatePlayerPopulation(ownerId);
   }
 

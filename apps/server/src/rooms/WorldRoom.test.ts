@@ -568,6 +568,64 @@ describe('pathfinding (SIM-01)', () => {
   });
 });
 
+describe('route invalidation (SIM-01 follow-up)', () => {
+  it('re-routes when a building appears on the remaining path', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    const unit = addUnit(room, { id: 'u_1', ownerId: 'player-a', x: 10.5, y: 10.5 });
+
+    internals(room).commands.handleMoveUnits(createClient('player-a'), {
+      unitIds: ['u_1'],
+      targetGridX: 20,
+      targetGridY: 10
+    });
+    internals(room).update(100);
+    expect(unit.pathX.length).toBeGreaterThan(0);
+
+    // A completed tower dropped exactly on the next waypoint's tile.
+    const nextX = Math.floor(unit.pathX[0]);
+    const nextY = Math.floor(unit.pathY[0]);
+    addBuilding(room, { id: 'b_1', ownerId: 'player-a', type: 'TOWER', gridX: nextX, gridY: nextY });
+
+    internals(room).update(100);
+
+    // The stale route is dropped and a fresh search is queued; the tick's own
+    // path batch already ran, so the new route arrives on the next tick.
+    const movement = internals(room).movement;
+    expect(unit.pathX.length).toBe(0);
+    expect(movement.pendingPathIds.has('u_1')).toBe(true);
+
+    internals(room).update(100);
+    expect(unit.pathX.length).toBeGreaterThan(0);
+    const reroutedOntoObstacle =
+      Math.floor(unit.pathX[0]) === nextX && Math.floor(unit.pathY[0]) === nextY;
+    expect(reroutedOntoObstacle).toBe(false);
+  });
+
+  it('does not touch a route that is still clear', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    const unit = addUnit(room, { id: 'u_1', ownerId: 'player-a', x: 10.5, y: 10.5 });
+
+    internals(room).commands.handleMoveUnits(createClient('player-a'), {
+      unitIds: ['u_1'],
+      targetGridX: 30,
+      targetGridY: 10
+    });
+    internals(room).update(100);
+    const pathLength = unit.pathX.length;
+    expect(pathLength).toBeGreaterThan(0);
+
+    internals(room).update(100);
+
+    const movement = internals(room).movement;
+    expect(movement.pendingPathIds.size).toBe(0);
+    expect(movement.lastRepathAt.size).toBe(0);
+    // Untouched: still the same route, not re-searched and not cleared.
+    expect(unit.pathX.length).toBe(pathLength);
+  });
+});
+
 describe('tower combat (SIM-03)', () => {
   it('damages an enemy unit inside its range and spares its owner units', () => {
     const room = createRoom();

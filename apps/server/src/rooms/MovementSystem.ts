@@ -25,6 +25,16 @@ const PATH_BUDGET_MS = 3;
 const BLOCKED_GRID_MAX_AGE_MS = 1000;
 
 /**
+ * Minimum gap between two obstacle-triggered re-routes for one unit, in
+ * milliseconds. A route whose every alternative is walled off would otherwise be
+ * re-searched on every tick: the search returns straight-line, the next tile is
+ * still blocked, and the unit burns its share of the per-tick path budget
+ * forever. Five hundred ms is invisible to the player and caps a stuck unit at
+ * two searches per second.
+ */
+const REPATH_COOLDOWN_MS = 500;
+
+/**
  * Routing, waypoint queues and the movement half of every order (SIM-01,
  * CTL-05).
  *
@@ -46,6 +56,8 @@ export class MovementSystem {
   /** Unit ids waiting for a route, oldest first. `pendingPathIds` dedupes. */
   private pendingPaths: string[] = [];
   private pendingPathIds: Set<string> = new Set();
+  /** Last obstacle-triggered re-route per unit, for `REPATH_COOLDOWN_MS`. */
+  private readonly lastRepathAt: Map<string, number> = new Map();
 
   constructor(private readonly state: WorldState) {}
 
@@ -117,6 +129,55 @@ export class MovementSystem {
     if (!this.advanceQueuedWaypoint(unit)) {
       unit.actionState = 'IDLE';
     }
+  }
+
+  /**
+   * Drops everything this system remembers about a unit.
+   *
+   * Only the re-route cooldown is per-unit state here; the route itself lives on
+   * the unit, so a dead id must not keep a timestamp alive for the lifetime of
+   * the room.
+   */
+  forgetUnit(unitId: string) {
+    this.lastRepathAt.delete(unitId);
+  }
+
+  /**
+   * Invalidates a route whose next tile has become an obstacle.
+   *
+   * Paths are computed when an order arrives, so a building placed across a
+   * unit's remaining route is not seen by anyone: the unit keeps following the
+   * stale waypoints and walks through the new wall. Called once per tick per
+   * moving unit, before the movement step, so the tile the unit is about to enter
+   * is checked against the same blocked grid the search uses. A hit drops the
+   * route and queues a fresh search; the unit walks straight for the tick or two
+   * the search needs, exactly like a failed search.
+   *
+   * @returns true when a new route was requested.
+   */
+  refreshRouteIfBlocked(unit: UnitState): boolean {
+    if (unit.pathX.length === 0 || unit.pathY.length === 0) return false;
+
+    const nextX = Math.floor(unit.pathX[0]);
+    const nextY = Math.floor(unit.pathY[0]);
+    if (!this.isBlockedTile(nextX, nextY)) return false;
+
+    const now = performance.now();
+    const lastRepath = this.lastRepathAt.get(unit.id);
+    // Only a *previous* re-route throttles: an untracked unit must be re-routed
+    // immediately, and `performance.now()` can legitimately be below the cooldown
+    // in a fresh process (tests) or after a page reload.
+    if (lastRepath !== undefined && now - lastRepath < REPATH_COOLDOWN_MS) return false;
+    this.lastRepathAt.set(unit.id, now);
+
+    this.setWalkTarget(unit, unit.targetX, unit.targetY);
+    return true;
+  }
+
+  /** Whether one tile of the cached blocked grid is an obstacle. */
+  private isBlockedTile(x: number, y: number): boolean {
+    if (x < 0 || y < 0 || x >= MAP_GRID_WIDTH || y >= MAP_GRID_HEIGHT) return false;
+    return this.getBlockedGrid()[y * MAP_GRID_WIDTH + x] === 1;
   }
 
   /**
