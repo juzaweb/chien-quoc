@@ -164,6 +164,61 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     attackCooldownMs: 2000,
     dropOffs: [],
     description: 'Defensive structure that fires arrows at approaching enemy forces.'
+  },
+  // ECO: the three drop-off buildings. All three cost the same 100 wood and take
+  // the same 6s / 600 HP, so the choice between them is purely positional — where
+  // the villager walks, not which building is "better". Only `dropOffs` differs,
+  // and it is what tells the economy system which loads each one accepts.
+  LUMBER_CAMP: {
+    type: 'LUMBER_CAMP',
+    name: 'Lumber Camp',
+    sizeX: 2,
+    sizeY: 2,
+    cost: { wood: 100, food: 0, gold: 0, stone: 0 },
+    buildTimeMs: 6000,
+    maxHp: 600,
+    populationProvided: 0,
+    trainableUnits: [],
+    attackPower: 0,
+    attackRange: 0,
+    attackCooldownMs: 0,
+    dropOffs: ['wood'],
+    description: 'Wood drop-off. Villagers haul logs here instead of walking back to the Town Center.'
+  },
+  MILL: {
+    type: 'MILL',
+    name: 'Mill',
+    sizeX: 2,
+    sizeY: 2,
+    cost: { wood: 100, food: 0, gold: 0, stone: 0 },
+    buildTimeMs: 6000,
+    maxHp: 600,
+    populationProvided: 0,
+    trainableUnits: [],
+    attackPower: 0,
+    attackRange: 0,
+    attackCooldownMs: 0,
+    dropOffs: ['food'],
+    description: 'Food drop-off. Berries and farm harvests are delivered here.'
+  },
+  MINING_CAMP: {
+    type: 'MINING_CAMP',
+    name: 'Mining Camp',
+    sizeX: 2,
+    sizeY: 2,
+    cost: { wood: 100, food: 0, gold: 0, stone: 0 },
+    buildTimeMs: 6000,
+    maxHp: 600,
+    populationProvided: 0,
+    trainableUnits: [],
+    attackPower: 0,
+    attackRange: 0,
+    attackCooldownMs: 0,
+    // One camp serves both mine types: a gold mine and a stone mine close
+    // enough to share a drop-off is a common map layout, and charging twice for
+    // it would just make the player pick the worse of the two spots.
+    dropOffs: ['gold', 'stone'],
+    description: 'Gold and stone drop-off. Serves both mine types from one spot.'
   }
 };
 

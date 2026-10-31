@@ -7,7 +7,18 @@ export interface Resources {
   stone: number;
 }
 
-export type BuildingType = 'TOWN_CENTER' | 'BARRACKS' | 'HOUSE' | 'FARM' | 'TOWER';
+export type BuildingType =
+  | 'TOWN_CENTER'
+  | 'BARRACKS'
+  | 'HOUSE'
+  | 'FARM'
+  | 'TOWER'
+  /** ECO: wood drop-off, placed next to a forest. */
+  | 'LUMBER_CAMP'
+  /** ECO: food drop-off, placed next to berries or a cluster of farms. */
+  | 'MILL'
+  /** ECO: gold and stone drop-off, placed between two mines. */
+  | 'MINING_CAMP';
 
 export type UnitType = 'VILLAGER' | 'SPEARMAN' | 'ARCHER' | 'CAVALRY';
 

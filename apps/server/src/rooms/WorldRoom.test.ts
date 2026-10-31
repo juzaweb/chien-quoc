@@ -1105,3 +1105,126 @@ describe('unit stance (CMB-01)', () => {
     expect(Math.hypot(unit.x - 10, unit.y - 10)).toBeLessThan(5);
   });
 });
+
+describe('drop-off buildings (ECO)', () => {
+  /**
+   * A villager standing on a node, with one drop-off building placed next to it
+   * and a town center pinned at the far end of the map, so "nearest drop-off"
+   * is a real choice rather than the only option.
+   */
+  function campScenario(options: { campType: string; nodeType: string }) {
+    const { campType, nodeType } = options;
+    const room = createRoom();
+    const player = addPlayer(room, 'player-a', { wood: 0, food: 0, gold: 0, stone: 0 });
+
+    const node = addResource(room, {
+      id: 'res_1',
+      resourceType: nodeType,
+      gridX: 50,
+      gridY: 41,
+      remainingAmount: 100
+    });
+    const camp = addBuilding(room, {
+      id: 'b_camp',
+      ownerId: 'player-a',
+      type: campType,
+      gridX: 50,
+      gridY: 44
+    });
+    addBuilding(room, { id: 'b_tc', ownerId: 'player-a', type: 'TOWN_CENTER', gridX: 5, gridY: 5 });
+
+    const unit = addUnit(room, {
+      id: 'u_1',
+      ownerId: 'player-a',
+      x: 50.5,
+      y: 41.5,
+      actionState: 'HARVESTING'
+    });
+    unit.targetEntityId = node.id;
+    unit.targetEntityType = 'resource';
+    unit.targetX = node.gridX;
+    unit.targetY = node.gridY;
+
+    return { room, player, node, camp, unit };
+  }
+
+  /** Ticks until the load is banked or the villager gives up. */
+  function bank(room: WorldRoom, done: () => boolean) {
+    for (let i = 0; i < 400 && !done(); i++) {
+      internals(room).update(100);
+    }
+  }
+
+  it('lumber camp banks wood instead of the distant town center', () => {
+    const { room, player, unit } = campScenario({ campType: 'LUMBER_CAMP', nodeType: 'wood' });
+
+    internals(room).update(1000);
+    expect(unit.actionState).toBe('RETURNING');
+    expect(unit.dropOffId).toBe('b_camp');
+
+    bank(room, () => player.wood > 0);
+    expect(player.wood).toBe(UNIT_BLUEPRINTS.VILLAGER.carryCapacity);
+  });
+
+  it('mill banks food', () => {
+    const { room, player, unit } = campScenario({ campType: 'MILL', nodeType: 'food' });
+
+    internals(room).update(1000);
+    expect(unit.dropOffId).toBe('b_camp');
+
+    bank(room, () => player.food > 0);
+    expect(player.food).toBe(UNIT_BLUEPRINTS.VILLAGER.carryCapacity);
+  });
+
+  it('mining camp banks both gold and stone', () => {
+    for (const resource of ['gold', 'stone'] as const) {
+      const { room, player, unit } = campScenario({ campType: 'MINING_CAMP', nodeType: resource });
+
+      internals(room).update(1000);
+      expect(unit.dropOffId, resource).toBe('b_camp');
+
+      bank(room, () => player[resource] > 0);
+      expect(player[resource], resource).toBe(UNIT_BLUEPRINTS.VILLAGER.carryCapacity);
+    }
+  });
+
+  it('a lumber camp refuses a load it does not handle', () => {
+    // Only a lumber camp is nearby, so a gold load has nowhere to go: the
+    // villager must keep it rather than walk to the wrong camp, and must not
+    // walk across the map to the town center either.
+    const room = createRoom();
+    const player = addPlayer(room, 'player-a', { wood: 0, gold: 0 });
+    const node = addResource(room, {
+      id: 'res_1',
+      resourceType: 'gold',
+      gridX: 50,
+      gridY: 41,
+      remainingAmount: 100
+    });
+    addBuilding(room, {
+      id: 'b_camp',
+      ownerId: 'player-a',
+      type: 'LUMBER_CAMP',
+      gridX: 50,
+      gridY: 44
+    });
+
+    const unit = addUnit(room, {
+      id: 'u_1',
+      ownerId: 'player-a',
+      x: 50.5,
+      y: 41.5,
+      actionState: 'HARVESTING'
+    });
+    unit.targetEntityId = node.id;
+    unit.targetEntityType = 'resource';
+
+    internals(room).update(1000);
+
+    expect(unit.carryingAmount).toBe(UNIT_BLUEPRINTS.VILLAGER.carryCapacity);
+    expect(unit.carryingResourceType).toBe('gold');
+    expect(unit.actionState).toBe('IDLE');
+    expect(unit.dropOffId).toBe('');
+    expect(player.gold).toBe(0);
+  });
+});

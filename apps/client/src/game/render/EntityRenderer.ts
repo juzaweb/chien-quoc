@@ -120,6 +120,13 @@ export class EntityRenderer {
         offsetY = 0;
       } else if (building.type === 'TOWER') {
         offsetY = -160;
+      } else if (
+        building.type === 'LUMBER_CAMP' ||
+        building.type === 'MILL' ||
+        building.type === 'MINING_CAMP'
+      ) {
+        // Same 256x220 sheet as the house, bottom-anchored the same way.
+        offsetY = -70;
       }
     } else {
       if (building.type === 'BARRACKS') {
@@ -215,6 +222,12 @@ export class EntityRenderer {
     else if (building.type === 'BARRACKS') barY = -270;
     else if (building.type === 'HOUSE') barY = -190;
     else if (building.type === 'FARM') barY = -100;
+    else if (
+      building.type === 'LUMBER_CAMP' ||
+      building.type === 'MILL' ||
+      building.type === 'MINING_CAMP'
+    )
+      barY = -190;
 
     // Background
     hpBar.fillStyle(0x0f172a, 0.85);

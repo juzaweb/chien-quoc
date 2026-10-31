@@ -160,6 +160,8 @@ export class PlacementController {
         offsetY = 0;
       } else if (type === 'TOWER') {
         offsetY = -160;
+      } else if (type === 'LUMBER_CAMP' || type === 'MILL' || type === 'MINING_CAMP') {
+        offsetY = -70;
       }
     } else {
       if (type === 'BARRACKS') {

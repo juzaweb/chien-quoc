@@ -32,7 +32,10 @@ const BUILDING_HOTKEYS: Array<{ key: string; type: BuildingType }> = [
   { key: 'W', type: 'BARRACKS' },
   { key: 'E', type: 'HOUSE' },
   { key: 'R', type: 'FARM' },
-  { key: 'T', type: 'TOWER' }
+  { key: 'T', type: 'TOWER' },
+  { key: 'Y', type: 'LUMBER_CAMP' },
+  { key: 'U', type: 'MILL' },
+  { key: 'I', type: 'MINING_CAMP' }
 ];
 
 /**

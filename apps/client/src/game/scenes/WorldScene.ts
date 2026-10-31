@@ -253,6 +253,9 @@ export class WorldScene extends Phaser.Scene {
     this.load.image('building_HOUSE', `/assets/buildings/house.png?${v}`);
     this.load.image('building_FARM', `/assets/buildings/farm.png?${v}`);
     this.load.image('building_TOWER', `/assets/buildings/tower.png?${v}`);
+    this.load.image('building_LUMBER_CAMP', `/assets/buildings/lumber_camp.png?${v}`);
+    this.load.image('building_MILL', `/assets/buildings/mill.png?${v}`);
+    this.load.image('building_MINING_CAMP', `/assets/buildings/mining_camp.png?${v}`);
 
     // Preload generated resource node assets with cache-busting version
     this.load.image('res_node_TREE', `/assets/resources/tree.png?${v}`);

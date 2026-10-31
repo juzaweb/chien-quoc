@@ -32,10 +32,6 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 
 ## Kinh tế
 
-- **Lumber Camp / Mining Camp / Mill** — chưa có trong `BUILDING_BLUEPRINTS`. Hạ tầng đã
-  sẵn (`BuildingBlueprint.dropOffs`), nhưng thiếu asset: 3 nhà này cần PNG mới theo cùng
-  bộ `scripts/generate_buildings_assets.py` (ComfyUI nội bộ) chứ không vẽ tay được cho
-  khớp 5 nhà còn lại.
 - **Resource queued gathering** (Shift khi click resource).
 - **Ruộng không lưu tiến độ** — `BuildingState.resourceAmount` chỉ nằm trong snapshot, chưa
   vào bảng `Building` của SQLite (thêm cột = migration Prisma). Hệ quả: restart giữa chừng
@@ -87,6 +83,7 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 - **Path không lưu vào SQLite** — sau restart, unit đang `MOVING` được khôi phục với
   `targetX/targetY` cũ nhưng `pathX/pathY` rỗng nên đi thẳng. Chấp nhận được, nhưng nếu
   muốn đúng thì lưu thêm hoặc tính lại path lúc restore.
-- **Chưa có Mill / Lumber Camp / Mining Camp** — `BuildingBlueprint.dropOffs` đã hỗ trợ
-  nhưng hiện chỉ TOWN_CENTER nhận tài nguyên, nên mọi chuyến hàng đều đi về TC và kinh tế
-  chậm hơn AoE ở các mỏ xa.
+- ~~**Chưa có Mill / Lumber Camp / Mining Camp**~~ — đã xong: 3 blueprint 2x2 (100 gỗ,
+  6 s, 600 HP), `dropOffs` lần lượt là `wood` / `food` / `gold,stone`, sprite PNG 256x220
+  + hotkey `Y/U/I`. Kiểm chứng bằng 4 test trong `WorldRoom.test.ts` (chọn camp gần nhất,
+  camp từ chối loại hàng không phụ trách).

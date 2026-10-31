@@ -1,6 +1,6 @@
 import React from 'react';
 import { BUILDING_BLUEPRINTS, BuildingType, Resources } from '@chien-quoc/shared';
-import { Landmark, ShieldAlert, Home, Wheat, TowerControl } from 'lucide-react';
+import { Landmark, ShieldAlert, Home, Wheat, TowerControl, TreePine, Warehouse, Pickaxe } from 'lucide-react';
 
 interface BuildMenuProps {
   playerResources: Resources;
@@ -14,7 +14,10 @@ const BUILDINGS: { type: BuildingType; icon: React.ReactNode; hotkey: string }[]
   { type: 'BARRACKS', icon: <ShieldAlert size={20} />, hotkey: 'W' },
   { type: 'HOUSE', icon: <Home size={20} />, hotkey: 'E' },
   { type: 'FARM', icon: <Wheat size={20} />, hotkey: 'R' },
-  { type: 'TOWER', icon: <TowerControl size={20} />, hotkey: 'T' }
+  { type: 'TOWER', icon: <TowerControl size={20} />, hotkey: 'T' },
+  { type: 'LUMBER_CAMP', icon: <TreePine size={20} />, hotkey: 'Y' },
+  { type: 'MILL', icon: <Warehouse size={20} />, hotkey: 'U' },
+  { type: 'MINING_CAMP', icon: <Pickaxe size={20} />, hotkey: 'I' }
 ];
 
 const BUILDING_THUMBNAILS: Record<BuildingType, string> = {
@@ -22,7 +25,10 @@ const BUILDING_THUMBNAILS: Record<BuildingType, string> = {
   BARRACKS: '/assets/buildings/barracks.png?v=3',
   HOUSE: '/assets/buildings/house.png?v=3',
   FARM: '/assets/buildings/farm.png?v=3',
-  TOWER: '/assets/buildings/tower.png?v=3'
+  TOWER: '/assets/buildings/tower.png?v=3',
+  LUMBER_CAMP: '/assets/buildings/lumber_camp.png?v=1',
+  MILL: '/assets/buildings/mill.png?v=1',
+  MINING_CAMP: '/assets/buildings/mining_camp.png?v=1'
 };
 
 export const BuildMenu: React.FC<BuildMenuProps> = ({
@@ -47,7 +53,7 @@ export const BuildMenu: React.FC<BuildMenuProps> = ({
         )}
       </div>
 
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {BUILDINGS.map(({ type, icon, hotkey }) => {
           const bp = BUILDING_BLUEPRINTS[type];
           const canAfford =
