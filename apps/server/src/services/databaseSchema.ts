@@ -5,22 +5,24 @@
  * missing, so a fresh clone (or a deleted `database/` folder) works without
  * requiring the Prisma CLI. Every statement is idempotent.
  *
- * Tables and indexes are exported separately: `User` gained a column after the
- * first release, so its indexes must be created *after* the migration that adds
- * that column (SQLite cannot index a column that does not exist yet).
+ * Table and column names are snake_case, matching each model's `@@map` and each
+ * field's `@map` in `prisma/schema.prisma`. Index names follow Prisma's
+ * generated convention over the mapped names (`<table>_<column>_key` for a
+ * unique constraint, `<table>_<columns>_idx` for `@@index`), so `prisma db push`
+ * and this boot DDL describe the same database.
  */
 export const DATABASE_TABLE_STATEMENTS: readonly string[] = [
-  `CREATE TABLE IF NOT EXISTS "User" (
+  `CREATE TABLE IF NOT EXISTS "users" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "username" TEXT NOT NULL,
-    "displayName" TEXT NOT NULL,
-    "displayNameKey" TEXT NOT NULL,
-    "passwordHash" TEXT NOT NULL,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "lastLoginAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "display_name" TEXT NOT NULL,
+    "display_name_key" TEXT NOT NULL,
+    "password_hash" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "last_login_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`,
 
-  `CREATE TABLE IF NOT EXISTS "Player" (
+  `CREATE TABLE IF NOT EXISTS "players" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "name" TEXT NOT NULL,
     "color" TEXT NOT NULL DEFAULT '#3b82f6',
@@ -29,64 +31,61 @@ export const DATABASE_TABLE_STATEMENTS: readonly string[] = [
     "gold" REAL NOT NULL DEFAULT 150,
     "stone" REAL NOT NULL DEFAULT 100,
     "population" INTEGER NOT NULL DEFAULT 0,
-    "populationCap" INTEGER NOT NULL DEFAULT 10,
-    "isOnline" BOOLEAN NOT NULL DEFAULT true,
-    "lastSavedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "population_cap" INTEGER NOT NULL DEFAULT 10,
+    "is_online" BOOLEAN NOT NULL DEFAULT true,
+    "last_saved_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`,
 
-  `CREATE TABLE IF NOT EXISTS "Building" (
+  `CREATE TABLE IF NOT EXISTS "buildings" (
     "id" TEXT NOT NULL PRIMARY KEY,
-    "ownerId" TEXT NOT NULL,
+    "owner_id" TEXT NOT NULL,
     "type" TEXT NOT NULL,
-    "gridX" INTEGER NOT NULL,
-    "gridY" INTEGER NOT NULL,
-    "sizeX" INTEGER NOT NULL,
-    "sizeY" INTEGER NOT NULL,
+    "grid_x" INTEGER NOT NULL,
+    "grid_y" INTEGER NOT NULL,
+    "size_x" INTEGER NOT NULL,
+    "size_y" INTEGER NOT NULL,
     "hp" REAL NOT NULL,
-    "maxHp" REAL NOT NULL,
-    "isConstructed" BOOLEAN NOT NULL DEFAULT true,
-    "constructionProgress" REAL NOT NULL DEFAULT 100,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "Building_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "Player" ("name") ON DELETE CASCADE ON UPDATE CASCADE
+    "max_hp" REAL NOT NULL,
+    "is_constructed" BOOLEAN NOT NULL DEFAULT true,
+    "construction_progress" REAL NOT NULL DEFAULT 100,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" DATETIME NOT NULL,
+    CONSTRAINT "buildings_owner_id_fkey" FOREIGN KEY ("owner_id") REFERENCES "players" ("id") ON DELETE CASCADE ON UPDATE CASCADE
   );`,
 
-  `CREATE TABLE IF NOT EXISTS "Unit" (
+  `CREATE TABLE IF NOT EXISTS "units" (
     "id" TEXT NOT NULL PRIMARY KEY,
-    "ownerId" TEXT NOT NULL,
+    "owner_id" TEXT NOT NULL,
     "type" TEXT NOT NULL,
     "x" REAL NOT NULL,
     "y" REAL NOT NULL,
     "speed" REAL NOT NULL,
     "hp" REAL NOT NULL,
-    "maxHp" REAL NOT NULL,
-    "actionState" TEXT NOT NULL DEFAULT 'IDLE',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "Unit_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "Player" ("name") ON DELETE CASCADE ON UPDATE CASCADE
+    "max_hp" REAL NOT NULL,
+    "action_state" TEXT NOT NULL DEFAULT 'IDLE',
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" DATETIME NOT NULL,
+    CONSTRAINT "units_owner_id_fkey" FOREIGN KEY ("owner_id") REFERENCES "players" ("id") ON DELETE CASCADE ON UPDATE CASCADE
   );`,
 
-  `CREATE TABLE IF NOT EXISTS "WorldResourceNode" (
+  `CREATE TABLE IF NOT EXISTS "world_resource_nodes" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "type" TEXT NOT NULL,
-    "resourceType" TEXT NOT NULL,
-    "gridX" INTEGER NOT NULL,
-    "gridY" INTEGER NOT NULL,
-    "remainingAmount" REAL NOT NULL,
-    "maxAmount" REAL NOT NULL,
-    "updatedAt" DATETIME NOT NULL
+    "resource_type" TEXT NOT NULL,
+    "grid_x" INTEGER NOT NULL,
+    "grid_y" INTEGER NOT NULL,
+    "remaining_amount" REAL NOT NULL,
+    "max_amount" REAL NOT NULL,
+    "updated_at" DATETIME NOT NULL
   );`
 ];
 
-/**
- * Indexes created after `migrateUserTable()` has ensured every column exists.
- */
 export const DATABASE_INDEX_STATEMENTS: readonly string[] = [
-  `CREATE UNIQUE INDEX IF NOT EXISTS "User_username_key" ON "User"("username");`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS "User_displayNameKey_key" ON "User"("displayNameKey");`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS "Player_name_key" ON "Player"("name");`,
-  `CREATE INDEX IF NOT EXISTS "Building_ownerId_idx" ON "Building"("ownerId");`,
-  `CREATE INDEX IF NOT EXISTS "Unit_ownerId_idx" ON "Unit"("ownerId");`,
-  `CREATE INDEX IF NOT EXISTS "WorldResourceNode_gridX_gridY_idx" ON "WorldResourceNode"("gridX", "gridY");`
+  `CREATE UNIQUE INDEX IF NOT EXISTS "users_username_key" ON "users"("username");`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "users_display_name_key_key" ON "users"("display_name_key");`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "players_name_key" ON "players"("name");`,
+  `CREATE INDEX IF NOT EXISTS "buildings_owner_id_idx" ON "buildings"("owner_id");`,
+  `CREATE INDEX IF NOT EXISTS "units_owner_id_idx" ON "units"("owner_id");`,
+  `CREATE INDEX IF NOT EXISTS "world_resource_nodes_grid_x_grid_y_idx" ON "world_resource_nodes"("grid_x", "grid_y");`
 ];

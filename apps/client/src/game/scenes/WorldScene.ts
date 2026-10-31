@@ -123,8 +123,27 @@ export interface SelectedEntityData {
  */
 export class WorldScene extends Phaser.Scene {
   public room: Room | null = null;
-  public mySessionId: string = '';
+  /**
+   * Ownership key the server writes on every entity (`Player.id`, the account
+   * id). It is not the socket session id: that changes on every refresh and
+   * reconnect, which is exactly what used to lose the empire.
+   */
+  public get myOwnerId(): string {
+    if (this.cachedOwnerId) return this.cachedOwnerId;
+    if (!this.room || !this.myPlayerName) return '';
+
+    // Resolved from the snapshot rather than `room.sessionId`; the SDK does not
+    // expose the auth payload the server keyed the entities with.
+    let found = '';
+    this.room.state.players.forEach((p: any) => {
+      if (!found && p.name === this.myPlayerName) found = p.id;
+    });
+    this.cachedOwnerId = found;
+    return found;
+  }
+  /** Display name of this account, from the auth API. Stable across reloads. */
   public myPlayerName: string = '';
+  private cachedOwnerId: string = '';
   private boundRoomId: string = '';
   private eventsBoundRoom: Room | null = null;
 
@@ -431,12 +450,13 @@ export class WorldScene extends Phaser.Scene {
     // event can both call this with the same object.
     if (room === this.room) return;
 
-    // Same roomId but a different Room instance means a reconnect: ownership and
-    // sessionId must be refreshed, but the world snapshot itself is unchanged.
+    // Same roomId but a different Room instance means a reconnect: the snapshot
+    // is the same world, but the cached owner id may not be resolvable yet, so
+    // it is dropped and re-resolved from the new snapshot.
     const isNewWorld = room.roomId !== this.boundRoomId;
 
     this.room = room;
-    this.mySessionId = room.sessionId;
+    this.cachedOwnerId = '';
     this.boundRoomId = room.roomId;
 
     if (isNewWorld) {
@@ -456,22 +476,22 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * Player name is stable across reconnects (sessionId is not), so the camera can
-   * always locate this player's Town Center even after ownership is re-assigned.
+   * Player name is stable across reconnects, so the camera and the owner id can
+   * always be resolved even after the socket changed.
    */
   public setPlayerName(playerName: string) {
     this.myPlayerName = playerName;
+    this.cachedOwnerId = '';
     this.centerOnOwnBaseIfNeeded();
   }
 
   public isOwnBuilding(ownerId: string): boolean {
     if (!ownerId) return false;
-    return ownerId === this.mySessionId || (!!this.myPlayerName && ownerId === this.myPlayerName);
+    return ownerId === this.myOwnerId;
   }
 
   /**
-   * Own Town Center, or null when the snapshot does not contain it yet. Ownership
-   * matches on sessionId first, then on player name (survives a reconnect).
+   * Own Town Center, or null when the snapshot does not contain it yet.
    */
   public findOwnTownCenter(): any | null {
     if (!this.room) return null;
@@ -488,8 +508,8 @@ export class WorldScene extends Phaser.Scene {
   private centerOnOwnBaseIfNeeded() {
     if (this.hasCenteredOnSpawn || !this.room) return;
 
-    // Player name / sessionId may not be known yet; retry on the next tick instead.
-    if (!this.mySessionId && !this.myPlayerName) return;
+    // Player name may not be known yet; retry on the next tick instead.
+    if (!this.myPlayerName) return;
 
     const target = this.findOwnTownCenter();
     if (!target) return;
@@ -819,7 +839,7 @@ export class WorldScene extends Phaser.Scene {
           subType: unit.type,
           hp: unit.hp,
           maxHp: unit.maxHp,
-          isOwner: unit.ownerId === this.mySessionId,
+          isOwner: unit.ownerId === this.myOwnerId,
           carryingAmount: unit.carryingAmount,
           carryingResourceType: unit.carryingResourceType,
           stance: unit.stance
@@ -839,7 +859,7 @@ export class WorldScene extends Phaser.Scene {
           subType: b.type,
           hp: b.hp,
           maxHp: b.maxHp,
-          isOwner: b.ownerId === this.mySessionId,
+          isOwner: b.ownerId === this.myOwnerId,
           trainingQueue: Array.from(b.trainingQueue),
           isConstructed: b.isConstructed,
           constructionProgress: b.constructionProgress,

@@ -8,7 +8,6 @@ import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
 import { DATABASE_INDEX_STATEMENTS, DATABASE_TABLE_STATEMENTS } from './databaseSchema.js';
-import { normalizeForComparison } from '../utils/normalizeName.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,50 +79,17 @@ export class DatabaseService {
   /**
    * Creates all tables/indexes when they are missing. Safe to run on every boot.
    *
-   * Tables come first, then the `User` migration, then indexes: an index on a
-   * column added by the migration would otherwise fail on an older database.
+   * Table names are snake_case plurals and columns are snake_case too (each
+   * model's `@@map` / `@map`), so this DDL and `prisma/schema.prisma` describe
+   * the same database.
    */
   private static async ensureSchema() {
     for (const statement of DATABASE_TABLE_STATEMENTS) {
       await prisma.$executeRawUnsafe(statement);
     }
 
-    await this.migrateUserTable();
-
     for (const statement of DATABASE_INDEX_STATEMENTS) {
       await prisma.$executeRawUnsafe(statement);
-    }
-  }
-
-  /**
-   * Brings a `User` table created by an earlier build up to date.
-   *
-   * The account table originally shipped without `displayNameKey`, so an
-   * existing `dev.db` would fail every registration with a 500. Columns are
-   * added defensively because SQLite has no `ADD COLUMN IF NOT EXISTS`.
-   */
-  private static async migrateUserTable() {
-    const columns = await prisma.$queryRawUnsafe<{ name: string }[]>(
-      'PRAGMA table_info("User");'
-    );
-    const existing = new Set(columns.map((column) => column.name));
-
-    if (!existing.has('displayNameKey')) {
-      await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "displayNameKey" TEXT;');
-    }
-
-    // Backfill any rows written before the column existed.
-    const legacyRows = await prisma.$queryRawUnsafe<
-      { id: string; displayName: string }[]
-    >('SELECT "id", "displayName" FROM "User" WHERE "displayNameKey" IS NULL;');
-
-    for (const row of legacyRows) {
-      const key = normalizeForComparison(row.displayName);
-      await prisma.$executeRawUnsafe(
-        'UPDATE "User" SET "displayNameKey" = ? WHERE "id" = ?;',
-        key,
-        row.id
-      );
     }
   }
 
@@ -179,12 +145,14 @@ export class DatabaseService {
   }
 
   /**
-   * Loads an existing player and their empire (buildings & units) by player name.
+   * Loads an existing player and their empire (buildings & units) by account id.
+   *
+   * The account id, not the display name: a rename must not orphan an empire.
    */
-  public static async loadPlayerProfile(name: string) {
+  public static async loadPlayerProfile(playerId: string) {
     await this.initialize();
     return await prisma.player.findUnique({
-      where: { name },
+      where: { id: playerId },
       include: {
         buildings: true,
         units: true
@@ -209,6 +177,10 @@ export class DatabaseService {
 
   /**
    * Saves a single player's entire empire state (resources, buildings, units).
+   *
+   * `player.id` is the account id and the only ownership key: it is the primary
+   * key of `Player` and the `ownerId` foreign key of every row synced below.
+   * `player.name` is display text, so a rename just updates the column.
    */
   public static async savePlayerEmpire(
     player: PlayerState,
@@ -216,14 +188,15 @@ export class DatabaseService {
     units: UnitState[]
   ) {
     await this.initialize();
+    const ownerId = player.id;
 
     try {
       await prisma.$transaction(async (tx) => {
         // 1. Upsert player record
         await tx.player.upsert({
-          where: { name: player.name },
+          where: { id: ownerId },
           create: {
-            id: player.id,
+            id: ownerId,
             name: player.name,
             color: player.color,
             wood: player.wood,
@@ -235,7 +208,7 @@ export class DatabaseService {
             isOnline: player.isOnline
           },
           update: {
-            id: player.id,
+            name: player.name,
             color: player.color,
             wood: player.wood,
             food: player.food,
@@ -251,7 +224,7 @@ export class DatabaseService {
         const currentBuildingIds = buildings.map((b) => b.id);
         await tx.building.deleteMany({
           where: {
-            ownerId: player.name,
+            ownerId,
             id: { notIn: currentBuildingIds }
           }
         });
@@ -261,7 +234,7 @@ export class DatabaseService {
             where: { id: b.id },
             create: {
               id: b.id,
-              ownerId: player.name,
+              ownerId,
               type: b.type,
               gridX: b.gridX,
               gridY: b.gridY,
@@ -284,7 +257,7 @@ export class DatabaseService {
         const currentUnitIds = units.map((u) => u.id);
         await tx.unit.deleteMany({
           where: {
-            ownerId: player.name,
+            ownerId,
             id: { notIn: currentUnitIds }
           }
         });
@@ -294,7 +267,7 @@ export class DatabaseService {
             where: { id: u.id },
             create: {
               id: u.id,
-              ownerId: player.name,
+              ownerId,
               type: u.type,
               x: u.x,
               y: u.y,
@@ -327,23 +300,19 @@ export class DatabaseService {
     try {
       await this.initialize();
 
-      // Group buildings and units by owner name
-      const playerMap = new Map<string, PlayerState>();
-      state.players.forEach((p: PlayerState) => {
-        playerMap.set(p.name, p);
-      });
-
-      for (const [playerName, playerState] of playerMap.entries()) {
+      // One player entry per account, keyed by account id; entities are matched
+      // against the same id, so no name lookup is needed here.
+      for (const playerState of state.players.values()) {
         const ownedBuildings: BuildingState[] = [];
         state.buildings.forEach((b: BuildingState) => {
-          if (b.ownerId === playerState.id || b.ownerId === playerName) {
+          if (b.ownerId === playerState.id) {
             ownedBuildings.push(b);
           }
         });
 
         const ownedUnits: UnitState[] = [];
         state.units.forEach((u: UnitState) => {
-          if (u.ownerId === playerState.id || u.ownerId === playerName) {
+          if (u.ownerId === playerState.id) {
             ownedUnits.push(u);
           }
         });

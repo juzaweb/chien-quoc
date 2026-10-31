@@ -470,7 +470,7 @@ export class CommandController {
 
     const building = scene.room.state.buildings.get(scene.selectedBuildingId);
     if (!building) return false;
-    if (building.ownerId !== scene.mySessionId) return false;
+    if (building.ownerId !== scene.myOwnerId) return false;
     if (building.isConstructed) return false;
 
     scene.room.send(NetworkMessage.CANCEL_BUILDING, { buildingId: scene.selectedBuildingId });
@@ -752,7 +752,7 @@ export class CommandController {
     scene.selectedUnitIds.forEach((unitId) => {
       const unit = scene.room?.state.units.get(unitId);
       const container = scene.unitSprites.get(unitId);
-      if (!unit || !container || unit.ownerId !== scene.mySessionId) return;
+      if (!unit || !container || unit.ownerId !== scene.myOwnerId) return;
 
       const points: { x: number; y: number }[] = [{ x: container.x, y: container.y }];
       if (unit.actionState === 'MOVING') {
@@ -818,7 +818,7 @@ export class CommandController {
 
     const idleIds: string[] = [];
     scene.room.state.units.forEach((unit: any, unitId: string) => {
-      if (unit.ownerId !== scene.mySessionId) return;
+      if (unit.ownerId !== scene.myOwnerId) return;
       if (unit.actionState !== 'IDLE') return;
       const isVillager = unit.type === 'VILLAGER';
       if (category === 'villager' ? !isVillager : isVillager) return;
@@ -934,7 +934,7 @@ export class CommandController {
       const unit = scene.room?.state.units.get(unitId);
       // Left-click selection ignores ownership, so filter here - otherwise a
       // misclicked enemy unit would follow us into the group and take orders.
-      if (unit && unit.ownerId === scene.mySessionId) ids.add(unitId);
+      if (unit && unit.ownerId === scene.myOwnerId) ids.add(unitId);
     });
     // Assigning with nothing selected empties the group, like AoE2.
     this.controlGroups.set(index, ids);

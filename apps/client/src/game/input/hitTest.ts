@@ -10,19 +10,19 @@ import type { GridPoint, WorldPoint } from './pointer.js';
  */
 export interface HitTestScene {
   room: Room | null;
-  mySessionId: string;
+  myOwnerId: string;
   unitSprites: Map<string, Phaser.GameObjects.Container>;
   buildingSprites: Map<string, Phaser.GameObjects.Container>;
   resourceSprites: Map<string, Phaser.GameObjects.Container>;
 }
 
 /**
- * `findUnitAt`/`findBuildingAt` take an owner filter that is either a session
- * id or the literal `'enemy'`. Resolving that here keeps both call sites from
+ * `findUnitAt`/`findBuildingAt` take an owner filter that is either an owner id
+ * or the literal `'enemy'`. Resolving that here keeps both call sites from
  * re-implementing the comparison.
  */
 export function ownerMatches(scene: HitTestScene, ownerId: string, filter: string): boolean {
-  return filter === 'enemy' ? ownerId !== scene.mySessionId : ownerId === filter;
+  return filter === 'enemy' ? ownerId !== scene.myOwnerId : ownerId === filter;
 }
 
 /**
@@ -104,7 +104,7 @@ export function findBuildingAt(
  * cursor and the right-click order all agree on which building a click lands on.
  */
 export function findOwnFoundationAt(scene: HitTestScene, grid: GridPoint): string | null {
-  const buildingId = findBuildingAt(scene, grid, scene.mySessionId);
+  const buildingId = findBuildingAt(scene, grid, scene.myOwnerId);
   if (!buildingId) return null;
   const building = scene.room?.state.buildings.get(buildingId);
   return building && !building.isConstructed ? buildingId : null;
@@ -116,7 +116,7 @@ export function findOwnFoundationAt(scene: HitTestScene, grid: GridPoint): strin
  * and the panel all agree on which building a click lands on.
  */
 export function findOwnGatherableAt(scene: HitTestScene, grid: GridPoint): string | null {
-  const buildingId = findBuildingAt(scene, grid, scene.mySessionId);
+  const buildingId = findBuildingAt(scene, grid, scene.myOwnerId);
   if (!buildingId) return null;
   const building = scene.room?.state.buildings.get(buildingId);
   if (!building || !building.isConstructed) return null;

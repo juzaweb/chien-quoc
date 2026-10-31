@@ -53,7 +53,7 @@ export class SelectionController {
 
     if (clickedUnitId) {
       const unit = scene.room?.state.units.get(clickedUnitId);
-      const isOwn = !!unit && unit.ownerId === scene.mySessionId;
+      const isOwn = !!unit && unit.ownerId === scene.myOwnerId;
 
       // Double-click is detected per unit so a double-click on ground or on a
       // building does not leave a stale timestamp behind.
@@ -177,7 +177,7 @@ export class SelectionController {
     scene.unitSprites.forEach((container, unitId) => {
       if (selectedCount >= MAX_SELECTION) return;
       const unit = scene.room?.state.units.get(unitId);
-      if (unit && unit.ownerId === scene.mySessionId && !scene.selectedUnitIds.has(unitId)) {
+      if (unit && unit.ownerId === scene.myOwnerId && !scene.selectedUnitIds.has(unitId)) {
         // Ctrl-drag takes only soldiers, Alt-drag only villagers. Ownership is
         // already checked above, so an enemy unit can never slip in.
         if (filter === 'villager' && unit.type !== 'VILLAGER') return;
@@ -252,7 +252,7 @@ export class SelectionController {
     scene.unitSprites.forEach((container, unitId) => {
       if (selectedCount >= MAX_SELECTION) return;
       const unit = scene.room?.state.units.get(unitId);
-      if (!unit || unit.ownerId !== scene.mySessionId || unit.type !== type) return;
+      if (!unit || unit.ownerId !== scene.myOwnerId || unit.type !== type) return;
       if (scene.selectedUnitIds.has(unitId)) return;
 
       const { centerY, radiusX, radiusY } = getUnitBodyBox(container);

@@ -30,6 +30,7 @@ import { ResourceNodeState } from '../schema/ResourceNodeState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { WorldState } from '../schema/WorldState.js';
 import { getBuildApproachPoint } from './construction.js';
+import { ownerIdOf } from './identity.js';
 
 /**
  * What the command layer needs from the room and its sibling systems.
@@ -113,7 +114,8 @@ export class CommandSystem {
   ) {}
 
   handlePlaceBuilding(client: Client, payload: PlaceBuildingPayload) {
-    const player = this.state.players.get(client.sessionId);
+    const ownerId = ownerIdOf(client);
+    const player = this.state.players.get(ownerId);
     if (!player) return;
 
     const blueprint = BUILDING_BLUEPRINTS[payload.type];
@@ -174,7 +176,7 @@ export class CommandSystem {
     const buildingId = `b_${this.ports.allocateEntityId()}`;
     const building = new BuildingState();
     building.id = buildingId;
-    building.ownerId = client.sessionId;
+    building.ownerId = ownerId;
     building.type = payload.type;
     building.gridX = payload.gridX;
     building.gridY = payload.gridY;
@@ -186,7 +188,7 @@ export class CommandSystem {
     building.constructionProgress = 0;
 
     this.state.buildings.set(buildingId, building);
-    this.ports.updatePlayerPopulation(client.sessionId);
+    this.ports.updatePlayerPopulation(ownerId);
   }
 
   handleMoveUnits(client: Client, payload: MoveUnitsPayload) {
@@ -237,9 +239,10 @@ export class CommandSystem {
   }
 
   handleTrainUnit(client: Client, payload: TrainUnitPayload) {
-    const player = this.state.players.get(client.sessionId);
+    const ownerId = ownerIdOf(client);
+    const player = this.state.players.get(ownerId);
     const building = this.state.buildings.get(payload.buildingId);
-    if (!player || !building || building.ownerId !== client.sessionId) return;
+    if (!player || !building || building.ownerId !== ownerId) return;
 
     const blueprint = BUILDING_BLUEPRINTS[building.type as BuildingType];
     if (!blueprint || !blueprint.trainableUnits.includes(payload.unitType)) {
@@ -286,7 +289,7 @@ export class CommandSystem {
    * been produced yet, the player only loses the elapsed time.
    */
   handleCancelTrain(client: Client, payload: CancelTrainPayload) {
-    const player = this.state.players.get(client.sessionId);
+    const player = this.state.players.get(ownerIdOf(client));
     if (!player) return;
 
     const building = this.requireOwnedBuilding(client, payload.buildingId);
@@ -321,7 +324,7 @@ export class CommandSystem {
    * misclicked hotkey would be unrecoverable.
    */
   handleCancelBuilding(client: Client, payload: CancelBuildingPayload) {
-    const player = this.state.players.get(client.sessionId);
+    const player = this.state.players.get(ownerIdOf(client));
     if (!player) return;
 
     const building = this.requireOwnedBuilding(client, payload.buildingId);
@@ -359,6 +362,7 @@ export class CommandSystem {
     // The client chooses targetEntityId/targetType freely, so resolve the target
     // from authoritative state and reject anything that is missing or friendly.
     // Without this a client can order units to attack an ally or itself.
+    const ownerId = ownerIdOf(client);
     const target =
       payload.targetType === 'unit'
         ? this.state.units.get(payload.targetEntityId)
@@ -370,14 +374,14 @@ export class CommandSystem {
       this.ports.rejectCommand(client, 'Target no longer exists');
       return;
     }
-    if (target.ownerId === client.sessionId) {
+    if (target.ownerId === ownerId) {
       this.ports.rejectCommand(client, 'Cannot attack your own units or buildings');
       return;
     }
 
     payload.unitIds.forEach((uId) => {
       const unit = this.state.units.get(uId);
-      if (unit && unit.ownerId === client.sessionId) {
+      if (unit && unit.ownerId === ownerId) {
         // A new order replaces any queued path; leaving waypoints behind would
         // make the unit resume an old route after the attack finishes.
         unit.queueTargetX.clear();
@@ -525,7 +529,7 @@ export class CommandSystem {
 
     payload.unitIds.forEach((uId) => {
       const unit = this.state.units.get(uId);
-      if (!unit || unit.ownerId !== client.sessionId) return;
+      if (!unit || unit.ownerId !== ownerIdOf(client)) return;
 
       unit.actionState = 'IDLE';
       unit.targetEntityId = '';
@@ -617,13 +621,14 @@ export class CommandSystem {
   private collectOwnedUnits(client: Client, unitIds: string[]): UnitState[] {
     const owned: UnitState[] = [];
     const seen = new Set<string>();
+    const ownerId = ownerIdOf(client);
 
     unitIds.forEach((uId) => {
       if (seen.has(uId)) return;
       seen.add(uId);
 
       const unit = this.state.units.get(uId);
-      if (unit && unit.ownerId === client.sessionId) owned.push(unit);
+      if (unit && unit.ownerId === ownerId) owned.push(unit);
     });
 
     return owned;
@@ -680,7 +685,7 @@ export class CommandSystem {
       this.ports.rejectCommand(client, 'Building no longer exists');
       return null;
     }
-    if (building.ownerId !== client.sessionId) {
+    if (building.ownerId !== ownerIdOf(client)) {
       this.ports.rejectCommand(client, 'Not your building');
       return null;
     }

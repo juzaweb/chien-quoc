@@ -37,6 +37,7 @@ import { EconomySystem } from './EconomySystem.js';
 import { CombatSystem } from './CombatSystem.js';
 import { CommandSystem } from './CommandSystem.js';
 import { MovementSystem } from './MovementSystem.js';
+import { ownerIdOf, RoomAuth } from './identity.js';
 
 const PLAYER_COLORS = [
   '#3b82f6', // Blue
@@ -48,16 +49,6 @@ const PLAYER_COLORS = [
   '#06b6d4', // Cyan
   '#84cc16'  // Lime
 ];
-
-/**
- * Identity resolved by {@link WorldRoom.onAuth} and carried to `onJoin` as
- * `client.auth`. It holds the verified account, never client-supplied options.
- */
-interface WorldRoomAuth {
-  userId: string;
-  username: string;
-  displayName: string;
-}
 
 export class WorldRoom extends Room<{ state: WorldState }> {
   private nextEntityId: number = 1000;
@@ -126,6 +117,15 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
   private readyPromise: Promise<void> | null = null;
   private worldRestoreError: Error | null = null;
+
+  /**
+   * The session currently driving each account.
+   *
+   * One account owns one empire, so one entry per account is enough: a join
+   * replaces the entry, and a socket that has been superseded can no longer
+   * remove the player or persist a stale snapshot when it finally closes.
+   */
+  private readonly activeSessionByUser = new Map<string, string>();
 
   onCreate(options: any) {
     this.setState(new WorldState());
@@ -238,7 +238,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         for (const b of p.buildings) {
           const building = new BuildingState();
           building.id = b.id;
-          building.ownerId = p.name;
+          building.ownerId = p.id;
           building.type = b.type;
           building.gridX = b.gridX;
           building.gridY = b.gridY;
@@ -259,7 +259,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         for (const u of p.units) {
           const unit = new UnitState();
           unit.id = u.id;
-          unit.ownerId = p.name;
+          unit.ownerId = p.id;
           unit.type = u.type;
           unit.x = u.x;
           unit.y = u.y;
@@ -298,6 +298,26 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     if (Number.isFinite(value) && value > this.nextEntityId) {
       this.nextEntityId = value;
     }
+  }
+
+  /**
+   * Every building and unit owned by `ownerId`.
+   *
+   * Ownership is a single id now, so this is a plain filter — it is used to
+   * count an empire on join and to build the snapshot saved on leave.
+   */
+  private ownedBy(ownerId: string): { buildings: BuildingState[]; units: UnitState[] } {
+    const buildings: BuildingState[] = [];
+    this.state.buildings.forEach((b: BuildingState) => {
+      if (b.ownerId === ownerId) buildings.push(b);
+    });
+
+    const units: UnitState[] = [];
+    this.state.units.forEach((u: UnitState) => {
+      if (u.ownerId === ownerId) units.push(u);
+    });
+
+    return { buildings, units };
   }
 
   /**
@@ -485,7 +505,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
    *
    * @param token Bearer token forwarded from the matchmaking request headers.
    */
-  static async onAuth(token: string | undefined): Promise<WorldRoomAuth> {
+  static async onAuth(token: string | undefined): Promise<RoomAuth> {
     const payload = AuthService.verifyToken(token);
     if (!payload) {
       // AUTH_FAILED (525) is the canonical matchmaking code; the client checks
@@ -502,13 +522,14 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
   async onJoin(client: Client, options: any) {
     // `onAuth` runs before every join and rejects anything without a verified
-    // token, so the account name is the only ownership key. There is deliberately
+    // token, so the account id is the only ownership key. There is deliberately
     // no fallback to `options.playerName`: a client-supplied name would let a
     // player join as somebody else's empire.
-    const authUser = client.auth as Partial<WorldRoomAuth> | undefined;
-    if (!authUser?.displayName) {
+    const authUser = client.auth as Partial<RoomAuth> | undefined;
+    if (!authUser?.userId || !authUser.displayName) {
       throw new Error('Cannot join without an authenticated account.');
     }
+    const ownerId = authUser.userId;
     const playerName = authUser.displayName;
 
     try {
@@ -523,11 +544,14 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         throw new Error(`World restore failed: ${this.worldRestoreError.message}`);
       }
 
-      // Check if player profile already exists in Database
-      const savedProfile = await DatabaseService.loadPlayerProfile(playerName);
+      // Check if this account already has a saved profile in the database
+      const savedProfile = await DatabaseService.loadPlayerProfile(ownerId);
+      // Entities restored on boot are already owned by `ownerId`, so a rejoin
+      // finds its empire in memory and must not spawn a second base next to it.
+      const owned = this.ownedBy(ownerId);
 
       const player = new PlayerState();
-      player.id = client.sessionId;
+      player.id = ownerId;
       player.name = playerName;
 
       if (savedProfile) {
@@ -538,64 +562,42 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         player.stone = savedProfile.stone;
         player.population = savedProfile.population;
         player.populationCap = savedProfile.populationCap;
-        player.isOnline = true;
-
-        this.state.players.set(client.sessionId, player);
-
-        // Re-assign ownership of their structures and troops to active sessionId
-        let ownedBCount = 0;
-        this.state.buildings.forEach((b: BuildingState) => {
-          if (b.ownerId === playerName || b.ownerId === savedProfile.id) {
-            b.ownerId = client.sessionId;
-            ownedBCount++;
-          }
-        });
-
-        let ownedUCount = 0;
-        this.state.units.forEach((u: UnitState) => {
-          if (u.ownerId === playerName || u.ownerId === savedProfile.id) {
-            u.ownerId = client.sessionId;
-            ownedUCount++;
-          }
-        });
-
-        // If returning empire has no structures or units left, spawn starter base
-        if (ownedBCount === 0 && ownedUCount === 0) {
-          console.log(`[WorldRoom] Player ${playerName} has no remaining units/buildings. Spawning starter base.`);
-          this.spawnInitialBase(client.sessionId);
-        }
-
-        this.updatePlayerPopulation(client.sessionId);
-        console.log(`🏰 [WorldRoom] Welcome back Emperor ${playerName}! Empire restored from SQLite.`);
       } else {
         const playerIndex = this.state.players.size % PLAYER_COLORS.length;
         player.color = PLAYER_COLORS[playerIndex];
+      }
+      player.isOnline = true;
 
-        this.state.players.set(client.sessionId, player);
-        console.log(`⚔️ [WorldRoom] New Emperor ${player.name} (${client.sessionId}) joined.`);
+      // One entry per account: a refresh or second tab replaces the session that
+      // drives it, it never adds a second player.
+      this.state.players.set(ownerId, player);
+      this.activeSessionByUser.set(ownerId, client.sessionId);
 
+      if (owned.buildings.length === 0 && owned.units.length === 0) {
+        if (savedProfile) {
+          console.log(`[WorldRoom] Player ${playerName} has no remaining units/buildings. Spawning starter base.`);
+        }
         // Spawn initial base: Town Center + 3 starting Villagers
-        this.spawnInitialBase(client.sessionId);
+        this.spawnInitialBase(ownerId);
+      }
 
+      this.updatePlayerPopulation(ownerId);
+
+      if (!savedProfile) {
+        console.log(`⚔️ [WorldRoom] New Emperor ${playerName} (${ownerId}) joined.`);
         // Persist new empire immediately to DB
-        const ownedB: BuildingState[] = [];
-        this.state.buildings.forEach((b: BuildingState) => {
-          if (b.ownerId === client.sessionId) ownedB.push(b);
-        });
-        const ownedU: UnitState[] = [];
-        this.state.units.forEach((u: UnitState) => {
-          if (u.ownerId === client.sessionId) ownedU.push(u);
-        });
-
-        await DatabaseService.savePlayerEmpire(player, ownedB, ownedU);
+        const newEmpire = this.ownedBy(ownerId);
+        await DatabaseService.savePlayerEmpire(player, newEmpire.buildings, newEmpire.units);
+      } else {
+        console.log(`🏰 [WorldRoom] Welcome back Emperor ${playerName}! Empire restored from SQLite.`);
       }
     } catch (err) {
       console.error(`❌ [WorldRoom] Error joining player ${playerName}:`, err);
     }
   }
 
-  private spawnInitialBase(sessionId: string) {
-    const player = this.state.players.get(sessionId);
+  private spawnInitialBase(ownerId: string) {
+    const player = this.state.players.get(ownerId);
     if (!player) return;
 
     const tcBlueprint = BUILDING_BLUEPRINTS.TOWN_CENTER;
@@ -635,7 +637,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     const tcId = `b_${++this.nextEntityId}`;
     const townCenter = new BuildingState();
     townCenter.id = tcId;
-    townCenter.ownerId = sessionId;
+    townCenter.ownerId = ownerId;
     townCenter.type = 'TOWN_CENTER';
     townCenter.gridX = spawnX;
     townCenter.gridY = spawnY;
@@ -706,7 +708,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       const vId = `u_${++this.nextEntityId}`;
       const villager = new UnitState();
       villager.id = vId;
-      villager.ownerId = sessionId;
+      villager.ownerId = ownerId;
       villager.type = 'VILLAGER';
       villager.x = spawnX + off.dx;
       villager.y = spawnY + off.dy;
@@ -720,7 +722,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.state.units.set(vId, villager);
     });
 
-    this.updatePlayerPopulation(sessionId);
+    this.updatePlayerPopulation(ownerId);
   }
 
   /**
@@ -1009,23 +1011,32 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   async onLeave(client: Client, code?: number) {
-    const player = this.state.players.get(client.sessionId);
-    if (player) {
-      player.isOnline = false;
-      console.log(`[WorldRoom] Player ${player.name} left. Saving empire to SQLite...`);
+    const ownerId = ownerIdOf(client);
+    const player = this.state.players.get(ownerId);
+    if (!player) return;
 
-      const ownedB: BuildingState[] = [];
-      this.state.buildings.forEach((b: BuildingState) => {
-        if (b.ownerId === client.sessionId) ownedB.push(b);
-      });
-      const ownedU: UnitState[] = [];
-      this.state.units.forEach((u: UnitState) => {
-        if (u.ownerId === client.sessionId) ownedU.push(u);
-      });
-
-      await DatabaseService.savePlayerEmpire(player, ownedB, ownedU);
-      this.state.players.delete(client.sessionId);
+    // A refresh opens the new session before this socket is cleaned up, and that
+    // new session already drives the account. Dropping the player entry here
+    // would remove the live session's empire from the snapshot, so a superseded
+    // socket only closes itself.
+    if (this.activeSessionByUser.get(ownerId) !== client.sessionId) {
+      console.log(
+        `[WorldRoom] Player ${player.name} still has a live session; keeping the empire in place.`
+      );
+      return;
     }
+
+    this.activeSessionByUser.delete(ownerId);
+    this.state.players.delete(ownerId);
+    player.isOnline = false;
+    console.log(`[WorldRoom] Player ${player.name} left. Saving empire to SQLite...`);
+
+    // The empire is owned by the account id, which is what this leave is about:
+    // the snapshot below is the whole current empire, never an empty list that
+    // `savePlayerEmpire` would turn into a delete of every row.
+    const owned = this.ownedBy(ownerId);
+
+    await DatabaseService.savePlayerEmpire(player, owned.buildings, owned.units);
   }
 
   async onDispose() {

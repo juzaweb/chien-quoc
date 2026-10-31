@@ -44,7 +44,7 @@ export class FocusIndicator {
 
     this.scene.selectedUnitIds.forEach((unitId) => {
       const unit = room.state.units.get(unitId);
-      if (!unit || unit.ownerId !== this.scene.mySessionId) return;
+      if (!unit || unit.ownerId !== this.scene.myOwnerId) return;
       if (unit.actionState !== 'ATTACKING' || !unit.targetEntityId) return;
 
       // Several attackers on one target share a single marker; drawing one per

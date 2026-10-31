@@ -16,6 +16,7 @@ import { WorldState } from '../schema/WorldState.js';
 import { approachPointOutsideFootprint } from './construction.js';
 import { distanceToFootprint } from './geometry.js';
 import { gatheredType } from './gatherables.js';
+import { ownerIdOf } from './identity.js';
 
 /**
  * What the economy system needs from the rest of the room. Kept as an interface
@@ -116,7 +117,7 @@ export class EconomySystem {
 
     payload.unitIds.forEach((uId) => {
       const unit = this.state.units.get(uId);
-      if (!unit || unit.ownerId !== client.sessionId) return;
+      if (!unit || unit.ownerId !== ownerIdOf(client)) return;
       if (!UNIT_BLUEPRINTS[unit.type as UnitType]?.canHarvest) return;
 
       unit.queueTargetX.clear();
@@ -139,7 +140,7 @@ export class EconomySystem {
       this.ports.rejectCommand(client, 'Farm no longer exists');
       return;
     }
-    if (farm.ownerId !== client.sessionId) {
+    if (farm.ownerId !== ownerIdOf(client)) {
       this.ports.rejectCommand(client, 'That farm is not yours');
       return;
     }
@@ -160,7 +161,7 @@ export class EconomySystem {
 
     unitIds.forEach((uId) => {
       const unit = this.state.units.get(uId);
-      if (!unit || unit.ownerId !== client.sessionId) return;
+      if (!unit || unit.ownerId !== ownerIdOf(client)) return;
       if (!UNIT_BLUEPRINTS[unit.type as UnitType]?.canHarvest) return;
 
       this.orderFarmWork(unit, farm);

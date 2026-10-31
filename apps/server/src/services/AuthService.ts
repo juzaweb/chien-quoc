@@ -57,8 +57,8 @@ export class AuthError extends Error {
  * Stateless account service: scrypt password hashes stored in SQLite and
  * HMAC-signed bearer tokens (no external auth/JWT dependency).
  *
- * Uses raw SQL so the server does not require a Prisma client regeneration
- * when the `User` table is added.
+ * Uses raw SQL, so the column names below are the physical snake_case names
+ * from `prisma/schema.prisma`'s `@map`/`@@map`, not the Prisma field names.
  */
 export class AuthService {
   private static cachedSecret: string | null = null;
@@ -80,22 +80,23 @@ export class AuthService {
       throw new AuthError('Tên đăng nhập đã được sử dụng.', 409);
     }
 
-    // `Player.name` is unique and doubles as the in-world ownership key, so a
-    // display name may not collide with another account or a claimed empire.
+    // `Player.name` is the display name shown in-game and stays unique so two
+    // accounts cannot look identical. Ownership is `Player.id` (the account id),
+    // so this check only guards readability, not the empire.
     // Comparison uses a normalized key because SQLite's lower() only folds ASCII
     // (so "Đại Việt" and "đại việt" would otherwise both be allowed).
     const displayNameKey = normalizeForComparison(displayName);
 
     // Compared in JS: SQLite cannot fold diacritics, and empires are few.
     const existingPlayers = await prisma.$queryRaw<{ name: string }[]>`
-      SELECT "name" FROM "Player"
+      SELECT "name" FROM "players"
     `;
     if (existingPlayers.some((p) => normalizeForComparison(p.name) === displayNameKey)) {
       throw new AuthError('Tên lãnh chúa này đã có người sử dụng.', 409);
     }
 
     const nameTaken = await prisma.$queryRaw<{ id: string }[]>`
-      SELECT "id" FROM "User" WHERE "displayNameKey" = ${displayNameKey} LIMIT 1
+      SELECT "id" FROM "users" WHERE "display_name_key" = ${displayNameKey} LIMIT 1
     `;
     if (nameTaken.length > 0) {
       throw new AuthError('Tên lãnh chúa này đã có người sử dụng.', 409);
@@ -106,7 +107,7 @@ export class AuthService {
 
     try {
       await prisma.$executeRaw`
-        INSERT INTO "User" ("id", "username", "displayName", "displayNameKey", "passwordHash")
+        INSERT INTO "users" ("id", "username", "display_name", "display_name_key", "password_hash")
         VALUES (${id}, ${username}, ${displayName}, ${displayNameKey}, ${passwordHash})
       `;
     } catch {
@@ -140,7 +141,7 @@ export class AuthService {
     }
 
     await prisma.$executeRaw`
-      UPDATE "User" SET "lastLoginAt" = CURRENT_TIMESTAMP WHERE "id" = ${row.id}
+      UPDATE "users" SET "last_login_at" = CURRENT_TIMESTAMP WHERE "id" = ${row.id}
     `;
 
     const user: AuthUser = { id: row.id, username: row.username, displayName: row.displayName };
@@ -244,8 +245,8 @@ export class AuthService {
 
   private static async findByUsername(username: string): Promise<UserRow | null> {
     const rows = await prisma.$queryRaw<UserRow[]>`
-      SELECT "id", "username", "displayName", "passwordHash"
-      FROM "User"
+      SELECT "id", "username", "display_name" AS "displayName", "password_hash" AS "passwordHash"
+      FROM "users"
       WHERE "username" = ${username}
       LIMIT 1
     `;

@@ -109,8 +109,9 @@ export const Minimap: React.FC<MinimapProps> = ({ room, sceneRef, onPanToGrid, o
         });
 
         // 2. Draw Buildings
+        const myOwnerId = sceneRef?.current?.myOwnerId ?? '';
         room.state.buildings?.forEach((b: any) => {
-          const isMe = b.ownerId === room.sessionId;
+          const isMe = b.ownerId === myOwnerId;
           ctx.fillStyle = isMe ? '#38bdf8' : '#ef4444';
           const bw = Math.max(3.5, b.sizeX * scaleX);
           const bh = Math.max(3.5, b.sizeY * scaleY);
@@ -119,7 +120,7 @@ export const Minimap: React.FC<MinimapProps> = ({ room, sceneRef, onPanToGrid, o
 
         // 3. Draw Units
         room.state.units?.forEach((u: any) => {
-          const isMe = u.ownerId === room.sessionId;
+          const isMe = u.ownerId === myOwnerId;
           ctx.fillStyle = isMe ? '#4ade80' : '#f87171';
           ctx.fillRect(u.x * scaleX, u.y * scaleY, 2.5, 2.5);
         });

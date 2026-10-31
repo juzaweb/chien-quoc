@@ -77,7 +77,7 @@ export const App: React.FC = () => {
         if (cancelled || !user) return;
         setAuthUser(user);
         // Session is still valid: go straight into the world.
-        void connectToWorld();
+        void connectToWorld(user.displayName);
       })
       .finally(() => {
         if (!cancelled) setIsRestoringSession(false);
@@ -89,7 +89,13 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const connectToWorld = async () => {
+  /**
+   * `displayName` identifies this account's entry in `state.players`.
+   *
+   * The room keys players and entity ownership by account id, which the client
+   * does not receive, so the name (unique per account) is the lookup key here.
+   */
+  const connectToWorld = async (displayName: string) => {
     const token = getStoredToken();
     if (!token) {
       setAuthUser(null);
@@ -117,8 +123,8 @@ export const App: React.FC = () => {
       const cb = Callbacks.get(joinedRoom);
 
       // Listen to player state
-      cb.onAdd('players', (p: any, sessionId: any) => {
-        if (sessionId === joinedRoom.sessionId) {
+      cb.onAdd('players', (p: any) => {
+        if (p.name === displayName) {
           setPlayerColor(p.color);
           setResources({ wood: p.wood, food: p.food, gold: p.gold, stone: p.stone });
           setPopulation(p.population);
@@ -160,7 +166,7 @@ export const App: React.FC = () => {
 
   const handleAuthenticated = (user: AuthUser) => {
     setAuthUser(user);
-    void connectToWorld();
+    void connectToWorld(user.displayName);
   };
 
   const handleLeaveGame = () => {

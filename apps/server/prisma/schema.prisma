@@ -9,20 +9,26 @@ generator client {
   provider = "prisma-client-js"
 }
 
+/// Physical naming: every table and column is snake_case (`@@map` / `@map`).
+/// TypeScript keeps camelCase field names, so only the database is renamed.
 model User {
   id             String   @id
   username       String   @unique
-  displayName    String
+  displayName    String   @map("display_name")
   // Lowercased, diacritic-stripped form of `displayName`. SQLite's lower()
   // only folds ASCII, so uniqueness is enforced on this key instead.
-  displayNameKey String   @unique
-  passwordHash   String
-  createdAt      DateTime @default(now())
-  lastLoginAt    DateTime @default(now()) @updatedAt
+  displayNameKey String   @unique @map("display_name_key")
+  passwordHash   String   @map("password_hash")
+  createdAt      DateTime @default(now()) @map("created_at")
+  lastLoginAt    DateTime @default(now()) @updatedAt @map("last_login_at")
+
+  @@map("users")
 }
 
 model Player {
+  /// Account id (User.id). The stable ownership key for this empire.
   id            String     @id
+  /// Display name; can change, so it is never used as an ownership key.
   name          String     @unique
   color         String     @default("#3b82f6")
   wood          Float      @default(300)
@@ -30,63 +36,69 @@ model Player {
   gold          Float      @default(150)
   stone         Float      @default(100)
   population    Int        @default(0)
-  populationCap Int        @default(10)
-  isOnline      Boolean    @default(true)
-  lastSavedAt   DateTime   @default(now()) @updatedAt
-  createdAt     DateTime   @default(now())
+  populationCap Int        @default(10) @map("population_cap")
+  isOnline      Boolean    @default(true) @map("is_online")
+  lastSavedAt   DateTime   @default(now()) @updatedAt @map("last_saved_at")
+  createdAt     DateTime   @default(now()) @map("created_at")
 
   buildings     Building[]
   units         Unit[]
+
+  @@map("players")
 }
 
 model Building {
   id                   String   @id
-  ownerId              String
+  /// Owning account (User.id / Player.id), never a socket session id.
+  ownerId              String   @map("owner_id")
   type                 String
-  gridX                Int
-  gridY                Int
-  sizeX                Int
-  sizeY                Int
+  gridX                Int      @map("grid_x")
+  gridY                Int      @map("grid_y")
+  sizeX                Int      @map("size_x")
+  sizeY                Int      @map("size_y")
   hp                   Float
-  maxHp                Float
-  isConstructed        Boolean  @default(true)
-  constructionProgress Float    @default(100)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  maxHp                Float    @map("max_hp")
+  isConstructed        Boolean  @default(true) @map("is_constructed")
+  constructionProgress Float    @default(100) @map("construction_progress")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
-  player               Player   @relation(fields: [ownerId], references: [name], onDelete: Cascade)
+  player               Player   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
   @@index([ownerId])
+  @@map("buildings")
 }
 
 model Unit {
   id          String   @id
-  ownerId     String
+  ownerId     String   @map("owner_id")
   type        String
   x           Float
   y           Float
   speed       Float
   hp          Float
-  maxHp       Float
-  actionState String   @default("IDLE")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  maxHp       Float    @map("max_hp")
+  actionState String   @default("IDLE") @map("action_state")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  player      Player   @relation(fields: [ownerId], references: [name], onDelete: Cascade)
+  player      Player   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
   @@index([ownerId])
+  @@map("units")
 }
 
 model WorldResourceNode {
   id              String   @id
   type            String
-  resourceType    String
-  gridX           Int
-  gridY           Int
-  remainingAmount Float
-  maxAmount       Float
-  updatedAt       DateTime @updatedAt
+  resourceType    String   @map("resource_type")
+  gridX           Int      @map("grid_x")
+  gridY           Int      @map("grid_y")
+  remainingAmount Float    @map("remaining_amount")
+  maxAmount       Float    @map("max_amount")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
   @@index([gridX, gridY])
+  @@map("world_resource_nodes")
 }
 

@@ -7,11 +7,23 @@ import {
   UNIT_BLUEPRINTS
 } from '@chien-quoc/shared';
 import { WorldRoom } from './WorldRoom.js';
+import { DatabaseService } from '../services/DatabaseService.js';
 import { WorldState } from '../schema/WorldState.js';
 import { PlayerState } from '../schema/PlayerState.js';
 import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
+
+// The join/leave ownership tests at the end of this file must never touch
+// SQLite. Only the room's persistence entry points are stubbed; every other test
+// here drives handlers that do not save.
+vi.mock('../services/DatabaseService.js', () => ({
+  DatabaseService: {
+    loadPlayerProfile: vi.fn().mockResolvedValue(null),
+    savePlayerEmpire: vi.fn().mockResolvedValue(undefined),
+    saveFullWorldState: vi.fn().mockResolvedValue(undefined)
+  }
+}));
 
 /**
  * These tests drive `WorldRoom` without `onCreate()`: that method wires the
@@ -20,7 +32,11 @@ import { ResourceNodeState } from '../schema/ResourceNodeState.js';
  * build every map the handlers touch, so a bare instance plus a fresh
  * `WorldState` is the whole harness and a test calls `update()` by hand.
  */
-type TestClient = { sessionId: string; send: ReturnType<typeof vi.fn> };
+type TestClient = {
+  sessionId: string;
+  auth: { userId: string; displayName: string };
+  send: ReturnType<typeof vi.fn>;
+};
 
 function createRoom() {
   const room = new WorldRoom();
@@ -36,8 +52,22 @@ function createRoom() {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const internals = (room: WorldRoom) => room as any;
 
-function createClient(sessionId: string): TestClient {
-  return { sessionId, send: vi.fn() };
+/**
+ * A joined client. `onAuth` always runs before a join, so every client carries
+ * the verified account; the tests default both ids to the session id.
+ */
+function createClient(
+  sessionId: string,
+  account: { userId?: string; displayName?: string } = {}
+): TestClient {
+  return {
+    sessionId,
+    auth: {
+      userId: account.userId ?? sessionId,
+      displayName: account.displayName ?? sessionId
+    },
+    send: vi.fn()
+  };
 }
 
 function addPlayer(room: WorldRoom, sessionId: string, overrides: Partial<PlayerState> = {}) {
@@ -1242,5 +1272,122 @@ describe('drop-off buildings (ECO)', () => {
     expect(unit.actionState).toBe('IDLE');
     expect(unit.dropOffId).toBe('');
     expect(player.gold).toBe(0);
+  });
+});
+
+/**
+ * Ownership is keyed by the account id (`Player.id`), never by the socket
+ * session id. A refresh, a reconnect or a second tab opens a new session for the
+ * same account, and the empire must survive all three: same base, one player
+ * entry, and no database row ever deleted by a stale leave.
+ */
+describe('empire ownership by account (ACCT)', () => {
+  /** Signs in a client of `userId`, matching what `onAuth` hands to `onJoin`. */
+  function account(sessionId: string, userId = 'user-1', displayName = 'Emperor') {
+    return createClient(sessionId, { userId, displayName });
+  }
+
+  /** Adds an empire owned by `ownerId`, as the boot loader would restore it. */
+  function addEmpire(room: WorldRoom, ownerId: string) {
+    const base = addBuilding(room, {
+      id: 'b_1',
+      ownerId,
+      type: 'TOWN_CENTER',
+      gridX: 40,
+      gridY: 40
+    });
+    const villager = addUnit(room, { id: 'u_1', ownerId });
+    return { base, villager };
+  }
+
+  it('spawns one starter base per account, not one per session', async () => {
+    vi.mocked(DatabaseService.loadPlayerProfile).mockResolvedValue(null);
+    const room = createRoom();
+
+    await internals(room).onJoin(account('session-1'), {});
+    await internals(room).onJoin(account('session-2'), {});
+
+    const bases = Array.from(room.state.buildings.values()).filter(
+      (b: BuildingState) => b.ownerId === 'user-1'
+    );
+    expect(bases).toHaveLength(1);
+    expect(room.state.players.size).toBe(1);
+    expect(room.state.players.get('user-1')?.name).toBe('Emperor');
+  });
+
+  it('reuses the empire already in memory instead of spawning a second base', async () => {
+    vi.mocked(DatabaseService.loadPlayerProfile).mockResolvedValue({
+      id: 'user-1',
+      name: 'Emperor',
+      color: '#3b82f6',
+      wood: 10,
+      food: 20,
+      gold: 30,
+      stone: 40,
+      population: 1,
+      populationCap: 10,
+      isOnline: true
+    } as never);
+    const room = createRoom();
+    const { base } = addEmpire(room, 'user-1');
+    vi.mocked(DatabaseService.savePlayerEmpire).mockClear();
+
+    await internals(room).onJoin(account('session-2'), {});
+
+    expect(room.state.buildings.size).toBe(1);
+    expect(room.state.buildings.get('b_1')).toBe(base);
+    // Restored resources survive: the row is the authority on re-entry.
+    expect(room.state.players.get('user-1')?.wood).toBe(10);
+    expect(DatabaseService.savePlayerEmpire).not.toHaveBeenCalled();
+  });
+
+  it('a superseded socket leaves the live session and its empire alone', async () => {
+    const room = createRoom();
+    addEmpire(room, 'user-1');
+    vi.mocked(DatabaseService.loadPlayerProfile).mockResolvedValue(null);
+    await internals(room).onJoin(account('session-old'), {});
+    await internals(room).onJoin(account('session-new'), {});
+    vi.mocked(DatabaseService.savePlayerEmpire).mockClear();
+
+    await internals(room).onLeave(account('session-old'));
+
+    expect(DatabaseService.savePlayerEmpire).not.toHaveBeenCalled();
+    expect(room.state.players.get('user-1')).toBeDefined();
+    expect(room.state.buildings.size).toBe(1);
+  });
+
+  it('saves the whole empire when the live session leaves', async () => {
+    const room = createRoom();
+    addEmpire(room, 'user-1');
+    vi.mocked(DatabaseService.loadPlayerProfile).mockResolvedValue(null);
+    await internals(room).onJoin(account('session-old'), {});
+    await internals(room).onJoin(account('session-new'), {});
+    vi.mocked(DatabaseService.savePlayerEmpire).mockClear();
+
+    await internals(room).onLeave(account('session-new'));
+
+    expect(DatabaseService.savePlayerEmpire).toHaveBeenCalledTimes(1);
+    const [saved, buildings, units] = vi.mocked(DatabaseService.savePlayerEmpire).mock.calls[0];
+    expect(saved.id).toBe('user-1');
+    expect(buildings.map((b: BuildingState) => b.id)).toContain('b_1');
+    expect(units.map((u: UnitState) => u.id)).toContain('u_1');
+    expect(room.state.players.get('user-1')).toBeUndefined();
+  });
+
+  it('stamps new buildings and units with the account id', () => {
+    const room = createRoom();
+    addPlayer(room, 'user-1');
+    addBuilding(room, { id: 'b_9', ownerId: 'user-1' });
+
+    internals(room).commands.handlePlaceBuilding(account('session-1'), {
+      type: 'HOUSE',
+      gridX: 60,
+      gridY: 60
+    });
+
+    const placed = Array.from(room.state.buildings.values()).find(
+      (b: BuildingState) => b.type === 'HOUSE'
+    );
+    expect(placed?.ownerId).toBe('user-1');
   });
 });
