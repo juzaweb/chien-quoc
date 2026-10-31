@@ -141,7 +141,7 @@ describe('handleMoveUnits', () => {
     const foreign = addUnit(room, { id: 'u_1', ownerId: 'player-b', x: 12, y: 12 });
     const clientA = createClient('player-a');
 
-    internals(room).handleMoveUnits(clientA, { unitIds: ['u_1'], targetGridX: 60, targetGridY: 60 });
+    internals(room).commands.handleMoveUnits(clientA, { unitIds: ['u_1'], targetGridX: 60, targetGridY: 60 });
 
     expect(foreign.actionState).toBe('IDLE');
     expect(foreign.targetX).toBe(12);
@@ -154,7 +154,7 @@ describe('handleMoveUnits', () => {
     const clientA = createClient('player-a');
     const unitIds = Array.from({ length: MAX_SELECTION + 1 }, (_, i) => `u_${i}`);
 
-    internals(room).handleMoveUnits(clientA, { unitIds, targetGridX: 60, targetGridY: 60 });
+    internals(room).commands.handleMoveUnits(clientA, { unitIds, targetGridX: 60, targetGridY: 60 });
 
     expect(clientA.send).toHaveBeenCalledWith(NetworkMessage.ERROR_NOTIFICATION, {
       message: 'Too many units in one command'
@@ -169,7 +169,7 @@ describe('handleAttackTarget', () => {
     const own = addUnit(room, { id: 'u_1', ownerId: 'player-a' });
     const clientA = createClient('player-a');
 
-    internals(room).handleAttackTarget(clientA, {
+    internals(room).commands.handleAttackTarget(clientA, {
       unitIds: ['u_1'],
       targetEntityId: 'u_1',
       targetType: 'unit'
@@ -191,7 +191,7 @@ describe('handleAttackTarget', () => {
     attacker.queueTargetX.push(99);
     attacker.queueTargetY.push(99);
 
-    internals(room).handleAttackTarget(createClient('player-a'), {
+    internals(room).commands.handleAttackTarget(createClient('player-a'), {
       unitIds: ['u_1'],
       targetEntityId: 'u_2',
       targetType: 'unit'
@@ -210,7 +210,7 @@ describe('handleTrainUnit', () => {
     addBuilding(room, { id: 'b_1', ownerId: 'player-a', type: 'TOWN_CENTER' });
     const woodBefore = player.wood;
 
-    internals(room).handleTrainUnit(createClient('player-a'), {
+    internals(room).commands.handleTrainUnit(createClient('player-a'), {
       buildingId: 'b_1',
       unitType: 'VILLAGER'
     });
@@ -228,7 +228,7 @@ describe('handleTrainUnit', () => {
     addBuilding(room, { id: 'b_1', ownerId: 'player-a', type: 'TOWN_CENTER' });
     const clientA = createClient('player-a');
 
-    internals(room).handleTrainUnit(clientA, { buildingId: 'b_1', unitType: 'VILLAGER' });
+    internals(room).commands.handleTrainUnit(clientA, { buildingId: 'b_1', unitType: 'VILLAGER' });
 
     expect(clientA.send).toHaveBeenCalledWith(NetworkMessage.ERROR_NOTIFICATION, {
       message: 'Insufficient resources to train unit'
@@ -246,7 +246,7 @@ describe('handlePlaceBuilding', () => {
     const clientA = createClient('player-a');
     const buildingsBefore = room.state.buildings.size;
 
-    internals(room).handlePlaceBuilding(clientA, { type: 'HOUSE', gridX: 41, gridY: 41 });
+    internals(room).commands.handlePlaceBuilding(clientA, { type: 'HOUSE', gridX: 41, gridY: 41 });
 
     expect(clientA.send).toHaveBeenCalledWith(NetworkMessage.ERROR_NOTIFICATION, {
       message: 'Placement obstructed by existing structure or resource'
@@ -260,7 +260,7 @@ describe('handlePlaceBuilding', () => {
     const player = addPlayer(room, 'player-a', { wood: 500 });
     const clientA = createClient('player-a');
 
-    internals(room).handlePlaceBuilding(clientA, {
+    internals(room).commands.handlePlaceBuilding(clientA, {
       type: 'HOUSE',
       gridX: MAP_GRID_WIDTH - 1,
       gridY: 10
@@ -492,7 +492,7 @@ describe('pathfinding (SIM-01)', () => {
     }
 
     const unit = addUnit(room, { id: 'u_1', ownerId: 'player-a', x: 10.5, y: 10.5 });
-    internals(room).handleMoveUnits(createClient('player-a'), {
+    internals(room).commands.handleMoveUnits(createClient('player-a'), {
       unitIds: ['u_1'],
       targetGridX: 20,
       targetGridY: 10
@@ -534,7 +534,7 @@ describe('pathfinding (SIM-01)', () => {
     );
 
     const unit = addUnit(room, { id: 'u_1', ownerId: 'player-a', x: 10.5, y: 20.5 });
-    internals(room).handleMoveUnits(createClient('player-a'), {
+    internals(room).commands.handleMoveUnits(createClient('player-a'), {
       unitIds: ['u_1'],
       targetGridX: 20,
       targetGridY: 20
@@ -554,11 +554,11 @@ describe('pathfinding (SIM-01)', () => {
     const unit = addUnit(room, { id: 'u_1', ownerId: 'player-a', x: 10.5, y: 10.5 });
     const clientA = createClient('player-a');
 
-    internals(room).handleMoveUnits(clientA, { unitIds: ['u_1'], targetGridX: 30, targetGridY: 10 });
+    internals(room).commands.handleMoveUnits(clientA, { unitIds: ['u_1'], targetGridX: 30, targetGridY: 10 });
     internals(room).update(100);
     expect(unit.pathX.length).toBeGreaterThan(0);
 
-    internals(room).handleMoveUnits(clientA, { unitIds: ['u_1'], targetGridX: 10, targetGridY: 30 });
+    internals(room).commands.handleMoveUnits(clientA, { unitIds: ['u_1'], targetGridX: 10, targetGridY: 30 });
     expect(unit.pathX.length).toBe(0);
 
     internals(room).update(100);

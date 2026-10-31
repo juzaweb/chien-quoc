@@ -72,12 +72,13 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
   vì các lệnh đó idempotent (`STOP_UNITS`/select lại cùng unit thì kết quả như cũ), nhưng
   nên rà một lượt: thêm một helper dùng chung (timestamp debounce hoặc
   `Phaser.Input.Keyboard.JustDown` trên `Key` object) thay vì mỗi `bind*` tự xử lý.
-- **`WorldRoom.ts` 1755 dòng (đang tách)** — `WorldScene.ts` xong (2388 → 740, xem
-  `game/input/*` + `game/render/*`). Server: economy đã tách sang `rooms/EconomySystem.ts`
-  (harvest, mang hàng, drop-off, retarget) và combat sang `rooms/CombatSystem.ts` (damage,
-  `attackTimers`/`towerTimers`, aggro, kill/destroy) nên `WorldRoom` 2215 → 1755. Còn lại
-  nên tách tiếp, theo thứ tự đau nhất: **commands** (`handle*` + validate) rồi **movement**
-  (`setWalkTarget`, `processPendingPaths`, `getBlockedGrid`, `Pathfinder`).
+- **`WorldRoom.ts` 1176 dòng (đang tách)** — `WorldScene.ts` xong (2388 → 740, xem
+  `game/input/*` + `game/render/*`). Server đã tách ra 3 hệ: economy → `rooms/EconomySystem.ts`
+  (harvest, mang hàng, drop-off, retarget), combat → `rooms/CombatSystem.ts` (damage,
+  `attackTimers`/`towerTimers`, aggro, kill/destroy), commands → `rooms/CommandSystem.ts` (11
+  handler `handle*` + validate + formation/refund dùng chung) nên `WorldRoom` 2215 → 1176. Còn
+  lại nên tách tiếp **movement** (`setWalkTarget`, `advanceQueuedWaypoint`, `processPendingPaths`,
+  `getBlockedGrid`, `Pathfinder`) — `WorldRoom` chỉ còn giữ tick loop, persistence, spawn.
 - **Pathfinding không tự tính lại khi có vật cản mới** — path chỉ tính lúc ra lệnh; đặt nhà
   lên đường đi của một unit đang trên đường thì nó đi xuyên qua nhà đó cho tới đích. Cần
   kiểm tra ô kế tiếp mỗi tick và xin path mới khi bị chặn (hoặc dùng hàng đợi path có sẵn).

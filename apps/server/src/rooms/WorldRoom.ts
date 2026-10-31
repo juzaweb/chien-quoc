@@ -3,17 +3,12 @@ import { DatabaseService } from '../services/DatabaseService.js';
 import { AuthService } from '../services/AuthService.js';
 import {
   BUILDING_BLUEPRINTS,
-  BuildingBlueprint,
   BuildingType,
   INITIAL_POPULATION_CAP,
   MAP_GRID_HEIGHT,
   MAP_GRID_WIDTH,
-  MAX_QUEUED_WAYPOINTS,
-  MAX_SELECTION,
   NetworkMessage,
-  POPULATION_PER_HOUSE,
   PlaceBuildingPayload,
-  Resources,
   MoveUnitsPayload,
   TrainUnitPayload,
   AttackTargetPayload,
@@ -27,7 +22,6 @@ import {
   SERVER_TICK_RATE,
   UNIT_BLUEPRINTS,
   UnitType,
-  canTrainUnitsAt,
   isDirtRoadTile
 } from '@chien-quoc/shared';
 import { WorldState } from '../schema/WorldState.js';
@@ -35,9 +29,10 @@ import { PlayerState } from '../schema/PlayerState.js';
 import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
-import { getBuildApproachPoint, isWithinBuildRange, syncBuilders } from './construction.js';
+import { isWithinBuildRange, syncBuilders } from './construction.js';
 import { EconomySystem } from './EconomySystem.js';
 import { CombatSystem } from './CombatSystem.js';
+import { CommandSystem } from './CommandSystem.js';
 import { Pathfinder } from '../services/Pathfinder.js';
 
 const PLAYER_COLORS = [
@@ -50,17 +45,6 @@ const PLAYER_COLORS = [
   '#06b6d4', // Cyan
   '#84cc16'  // Lime
 ];
-
-/** Distance between formation cells, in tiles. Wide enough to keep rings apart. */
-const FORMATION_SPACING = 0.6;
-
-/**
- * CMD-04b refund rule. AoE returns everything for a foundation that was only
- * just placed and less once work has gone into it. These two constants keep the
- * agreed numbers in one place instead of inline in the handler.
- */
-const CANCEL_BUILDING_FULL_REFUND_BELOW = 10; // construction progress %
-const CANCEL_BUILDING_PARTIAL_REFUND_RATIO = 0.5;
 
 /**
  * SIM-01: how many path requests one tick may compute. A 220x220 corner-to-
@@ -80,36 +64,6 @@ const PATH_BUDGET_MS = 3;
  * changes a footprint without changing those counts.
  */
 const BLOCKED_GRID_MAX_AGE_MS = 1000;
-
-/**
- * Lays a squad out as a centred square block around its destination.
- *
- * A previous 3-column layout turned a 60-unit army into a 3x20 column, which
- * reads as a queue rather than a formation. The block is
- * `ceil(sqrt(count))` cells wide, so the group's centre of mass lands on the
- * clicked tile regardless of squad size.
- *
- * @param count Number of units to place. `0` yields an empty list.
- * @param spacing Cell distance in tiles.
- */
-function computeFormationOffsets(count: number, spacing: number): Array<{ x: number; y: number }> {
-  if (count <= 0) return [];
-
-  const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
-  const rows = Math.ceil(count / cols);
-  const offsets: Array<{ x: number; y: number }> = [];
-
-  for (let idx = 0; idx < count; idx++) {
-    const col = idx % cols;
-    const row = Math.floor(idx / cols);
-    offsets.push({
-      x: (col - (cols - 1) / 2) * spacing,
-      y: (row - (rows - 1) / 2) * spacing
-    });
-  }
-
-  return offsets;
-}
 
 /**
  * Identity resolved by {@link WorldRoom.onAuth} and carried to `onJoin` as
@@ -136,6 +90,25 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       updatePlayerPopulation: (ownerId) => this.updatePlayerPopulation(ownerId)
     });
     return this.combatSystem;
+  }
+  /**
+   * Command handlers (one per client message) and the validation they share.
+   * Built on first use for the same reason as {@link economySystem}.
+   */
+  private commandSystem: CommandSystem | null = null;
+  /** Built on first use; see {@link commandSystem}. */
+  private get commands(): CommandSystem {
+    this.commandSystem ??= new CommandSystem(this.state, {
+      rejectCommand: (client, message) => this.rejectCommand(client, message),
+      setWalkTarget: (unit, x, y) => this.setWalkTarget(unit, x, y),
+      advanceQueuedWaypoint: (unit) => this.advanceQueuedWaypoint(unit),
+      clearHarvestOrder: (unitId) => this.economy.clearHarvestOrder(unitId),
+      forgetBuilding: (buildingId) => this.combat.forgetBuilding(buildingId),
+      harvestOrder: (client, payload) => this.economy.handleHarvestOrder(client, payload),
+      allocateEntityId: () => ++this.nextEntityId,
+      updatePlayerPopulation: (ownerId) => this.updatePlayerPopulation(ownerId)
+    });
+    return this.commandSystem;
   }
   /**
    * Economy rules (gathering, carrying, drop-off) and their transient maps.
@@ -173,51 +146,51 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     // Setup network message listeners
     this.onMessage(NetworkMessage.PLACE_BUILDING, (client, message: PlaceBuildingPayload) => {
-      this.handlePlaceBuilding(client, message);
+      this.commands.handlePlaceBuilding(client, message);
     });
 
     this.onMessage(NetworkMessage.MOVE_UNITS, (client, message: MoveUnitsPayload) => {
-      this.handleMoveUnits(client, message);
+      this.commands.handleMoveUnits(client, message);
     });
 
     this.onMessage(NetworkMessage.TRAIN_UNIT, (client, message: TrainUnitPayload) => {
-      this.handleTrainUnit(client, message);
+      this.commands.handleTrainUnit(client, message);
     });
 
     this.onMessage(NetworkMessage.ATTACK_TARGET, (client, message: AttackTargetPayload) => {
-      this.handleAttackTarget(client, message);
+      this.commands.handleAttackTarget(client, message);
     });
 
     this.onMessage(NetworkMessage.ATTACK_MOVE, (client, message: AttackMovePayload) => {
-      this.handleAttackMove(client, message, 'ATTACK_MOVE');
+      this.commands.handleAttackMove(client, message, 'ATTACK_MOVE');
     });
 
     this.onMessage(NetworkMessage.PATROL, (client, message: AttackMovePayload) => {
-      this.handleAttackMove(client, message, 'PATROL');
+      this.commands.handleAttackMove(client, message, 'PATROL');
     });
 
     this.onMessage(NetworkMessage.BUILD_TARGET, (client, message: BuildTargetPayload) => {
-      this.handleBuildTarget(client, message);
+      this.commands.handleBuildTarget(client, message);
     });
 
     this.onMessage(NetworkMessage.HARVEST_RESOURCE, (client, message: HarvestResourcePayload) => {
-      this.handleHarvestResource(client, message);
+      this.commands.handleHarvestResource(client, message);
     });
 
     this.onMessage(NetworkMessage.STOP_UNITS, (client, message: StopUnitsPayload) => {
-      this.handleStopUnits(client, message);
+      this.commands.handleStopUnits(client, message);
     });
 
     this.onMessage(NetworkMessage.SET_RALLY_POINT, (client, message: SetRallyPointPayload) => {
-      this.handleSetRallyPoint(client, message);
+      this.commands.handleSetRallyPoint(client, message);
     });
 
     this.onMessage(NetworkMessage.CANCEL_TRAIN, (client, message: CancelTrainPayload) => {
-      this.handleCancelTrain(client, message);
+      this.commands.handleCancelTrain(client, message);
     });
 
     this.onMessage(NetworkMessage.CANCEL_BUILDING, (client, message: CancelBuildingPayload) => {
-      this.handleCancelBuilding(client, message);
+      this.commands.handleCancelBuilding(client, message);
     });
 
     // Run authoritative tick loop
@@ -750,170 +723,6 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.updatePlayerPopulation(sessionId);
   }
 
-  private handlePlaceBuilding(client: Client, payload: PlaceBuildingPayload) {
-    const player = this.state.players.get(client.sessionId);
-    if (!player) return;
-
-    const blueprint = BUILDING_BLUEPRINTS[payload.type];
-    if (!blueprint) {
-      client.send(NetworkMessage.ERROR_NOTIFICATION, { message: 'Invalid building type' });
-      return;
-    }
-
-    // Check resource sufficiency
-    if (
-      player.wood < blueprint.cost.wood ||
-      player.food < blueprint.cost.food ||
-      player.gold < blueprint.cost.gold ||
-      player.stone < blueprint.cost.stone
-    ) {
-      client.send(NetworkMessage.ERROR_NOTIFICATION, { message: 'Insufficient resources to construct building' });
-      return;
-    }
-
-    // Check bounds
-    const endX = payload.gridX + blueprint.sizeX;
-    const endY = payload.gridY + blueprint.sizeY;
-    if (payload.gridX < 0 || endX > MAP_GRID_WIDTH || payload.gridY < 0 || endY > MAP_GRID_HEIGHT) {
-      client.send(NetworkMessage.ERROR_NOTIFICATION, { message: 'Cannot build outside map bounds' });
-      return;
-    }
-
-    // Check tile occupancy collisions with other buildings and resource nodes
-    let isColliding = false;
-    this.state.buildings.forEach((b: BuildingState) => {
-      const bEndX = b.gridX + b.sizeX;
-      const bEndY = b.gridY + b.sizeY;
-      const overlapX = payload.gridX < bEndX && endX > b.gridX;
-      const overlapY = payload.gridY < bEndY && endY > b.gridY;
-      if (overlapX && overlapY) {
-        isColliding = true;
-      }
-    });
-
-    this.state.resourceNodes.forEach((res: ResourceNodeState) => {
-      if (res.gridX >= payload.gridX && res.gridX < endX && res.gridY >= payload.gridY && res.gridY < endY) {
-        isColliding = true;
-      }
-    });
-
-    if (isColliding) {
-      client.send(NetworkMessage.ERROR_NOTIFICATION, { message: 'Placement obstructed by existing structure or resource' });
-      return;
-    }
-
-    // Deduct resources
-    player.wood -= blueprint.cost.wood;
-    player.food -= blueprint.cost.food;
-    player.gold -= blueprint.cost.gold;
-    player.stone -= blueprint.cost.stone;
-
-    // Create building
-    const buildingId = `b_${++this.nextEntityId}`;
-    const building = new BuildingState();
-    building.id = buildingId;
-    building.ownerId = client.sessionId;
-    building.type = payload.type;
-    building.gridX = payload.gridX;
-    building.gridY = payload.gridY;
-    building.sizeX = blueprint.sizeX;
-    building.sizeY = blueprint.sizeY;
-    building.hp = 1; // CMD-05: a foundation is nearly defenceless until it is finished
-    building.maxHp = blueprint.maxHp;
-    building.isConstructed = false;
-    building.constructionProgress = 0;
-
-    this.state.buildings.set(buildingId, building);
-    this.updatePlayerPopulation(client.sessionId);
-  }
-
-  /**
-   * Keeps only the units this client actually owns, at most one entry per id.
-   *
-   * A repeated id would otherwise receive two orders and two formation cells,
-   * so the same unit would be counted twice in the block.
-   */
-  private collectOwnedUnits(client: Client, unitIds: string[]): UnitState[] {
-    const owned: UnitState[] = [];
-    const seen = new Set<string>();
-
-    unitIds.forEach((uId) => {
-      if (seen.has(uId)) return;
-      seen.add(uId);
-
-      const unit = this.state.units.get(uId);
-      if (unit && unit.ownerId === client.sessionId) owned.push(unit);
-    });
-
-    return owned;
-  }
-
-  /**
-   * Lays `units` out as a centred block around one grid destination (CMD-02) and
-   * clamps every cell to the map. Shared by every group order so a squad keeps
-   * its shape whether it walks or attack-moves.
-   *
-   * @returns One destination per input unit, in the same order.
-   */
-  private assignFormationTargets(
-    units: UnitState[],
-    destX: number,
-    destY: number
-  ): Array<{ x: number; y: number }> {
-    const offsets = computeFormationOffsets(units.length, FORMATION_SPACING);
-    return units.map((_, idx) => ({
-      x: Math.max(0, Math.min(MAP_GRID_WIDTH - 1, destX + offsets[idx].x)),
-      y: Math.max(0, Math.min(MAP_GRID_HEIGHT - 1, destY + offsets[idx].y))
-    }));
-  }
-
-  private handleMoveUnits(client: Client, payload: MoveUnitsPayload) {
-    if (!payload.unitIds || payload.unitIds.length === 0) return;
-    if (payload.unitIds.length > MAX_SELECTION) {
-      this.rejectCommand(client, 'Too many units in one command');
-      return;
-    }
-    if (!Number.isFinite(payload.targetGridX) || !Number.isFinite(payload.targetGridY)) {
-      this.rejectCommand(client, 'Invalid move target');
-      return;
-    }
-
-    // Shift+right click appends; a plain move replaces the whole order. Anything
-    // that is not literally `true` is treated as a direct move, so a malformed
-    // payload can never sneak extra state into a unit.
-    const queueWaypoint = payload.queue === true;
-
-    // Validate first, then spread the surviving units over one formation. Doing
-    // it in a single pass would size the block off the payload length, so ids
-    // that are foreign or stale would leave holes in the shape.
-    const ownedUnits = this.collectOwnedUnits(client, payload.unitIds);
-    const targets = this.assignFormationTargets(ownedUnits, payload.targetGridX, payload.targetGridY);
-
-    ownedUnits.forEach((unit, idx) => {
-      const { x: targetX, y: targetY } = targets[idx];
-
-      if (queueWaypoint) {
-        if (unit.queueTargetX.length >= MAX_QUEUED_WAYPOINTS) return;
-        unit.queueTargetX.push(targetX);
-        unit.queueTargetY.push(targetY);
-        // A unit with no order in flight has nothing to finish, so the point
-        // it just asked for becomes the active order immediately.
-        if (unit.actionState === 'IDLE') {
-          this.advanceQueuedWaypoint(unit);
-        }
-        return;
-      }
-
-      unit.queueTargetX.clear();
-      unit.queueTargetY.clear();
-      this.setWalkTarget(unit, targetX, targetY);
-      unit.actionState = 'MOVING';
-      unit.targetEntityId = '';
-      unit.targetEntityType = '';
-      unit.previousActionState = '';
-    });
-  }
-
   /**
    * Pops the next queued waypoint into the unit's active movement order.
    *
@@ -963,306 +772,6 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
   }
 
-  private handleTrainUnit(client: Client, payload: TrainUnitPayload) {
-    const player = this.state.players.get(client.sessionId);
-    const building = this.state.buildings.get(payload.buildingId);
-    if (!player || !building || building.ownerId !== client.sessionId) return;
-
-    const blueprint = BUILDING_BLUEPRINTS[building.type as BuildingType];
-    if (!blueprint || !blueprint.trainableUnits.includes(payload.unitType)) {
-      client.send(NetworkMessage.ERROR_NOTIFICATION, { message: 'Unit cannot be trained at this structure' });
-      return;
-    }
-
-    const unitBlueprint = UNIT_BLUEPRINTS[payload.unitType];
-    if (!unitBlueprint) return;
-
-    // Population limit check
-    if (player.population >= player.populationCap) {
-      client.send(NetworkMessage.ERROR_NOTIFICATION, { message: 'Population limit reached. Build more Houses!' });
-      return;
-    }
-
-    // Resource check
-    if (
-      player.wood < unitBlueprint.cost.wood ||
-      player.food < unitBlueprint.cost.food ||
-      player.gold < unitBlueprint.cost.gold ||
-      player.stone < unitBlueprint.cost.stone
-    ) {
-      client.send(NetworkMessage.ERROR_NOTIFICATION, { message: 'Insufficient resources to train unit' });
-      return;
-    }
-
-    // Deduct resources
-    player.wood -= unitBlueprint.cost.wood;
-    player.food -= unitBlueprint.cost.food;
-    player.gold -= unitBlueprint.cost.gold;
-    player.stone -= unitBlueprint.cost.stone;
-
-    // Add to training queue
-    building.trainingQueue.push(payload.unitType);
-  }
-
-  /**
-   * CMD-04a: drops the unit at the head of a building's training queue.
-   *
-   * The queue is the source of truth for what was being trained, so the refund
-   * amount never comes from the client: only the head is cancelled and only its
-   * own blueprint price is returned. Cancelling refunds in full — nothing has
-   * been produced yet, the player only loses the elapsed time.
-   */
-  private handleCancelTrain(client: Client, payload: CancelTrainPayload) {
-    const player = this.state.players.get(client.sessionId);
-    if (!player) return;
-
-    const building = this.requireOwnedBuilding(client, payload.buildingId);
-    if (!building) return;
-
-    if (building.trainingQueue.length === 0) {
-      this.rejectCommand(client, 'Nothing is being trained here');
-      return;
-    }
-
-    // Resolve the price before touching the queue: an unreadable entry must not
-    // disappear without a refund, which is what a shift-then-lookup would do.
-    const unitType = building.trainingQueue[0] as UnitType;
-    const blueprint = UNIT_BLUEPRINTS[unitType];
-    if (!blueprint) {
-      this.rejectCommand(client, 'Unknown unit in training queue');
-      return;
-    }
-
-    building.trainingQueue.shift();
-    // The elapsed time belonged to the cancelled unit. Keeping it would let the
-    // player cancel and re-queue to finish the next unit for free.
-    building.trainingProgressMs = 0;
-    this.refundResources(player, blueprint.cost, 1);
-  }
-
-  /**
-   * CMD-04b: removes a foundation that was placed but never finished.
-   *
-   * Completed buildings are rejected: this is a "cancel the build", not a
-   * demolish command, and silently deleting a finished Town Center on a
-   * misclicked hotkey would be unrecoverable.
-   */
-  private handleCancelBuilding(client: Client, payload: CancelBuildingPayload) {
-    const player = this.state.players.get(client.sessionId);
-    if (!player) return;
-
-    const building = this.requireOwnedBuilding(client, payload.buildingId);
-    if (!building) return;
-
-    if (building.isConstructed) {
-      this.rejectCommand(client, 'Cannot cancel a completed building');
-      return;
-    }
-
-    const blueprint = BUILDING_BLUEPRINTS[building.type as BuildingType];
-    if (blueprint) {
-      // A foundation that has barely been worked on returns everything; once
-      // real progress went in, the player eats half the cost.
-      const ratio =
-        building.constructionProgress < CANCEL_BUILDING_FULL_REFUND_BELOW
-          ? 1
-          : CANCEL_BUILDING_PARTIAL_REFUND_RATIO;
-      this.refundResources(player, blueprint.cost, ratio);
-    }
-
-    // Units walking to or attacking the foundation resolve the missing target
-    // on their next tick, so nothing has to be repointed here.
-    this.state.buildings.delete(building.id);
-    this.combat.forgetBuilding(building.id);
-  }
-
-  /**
-   * Credits a fraction of a blueprint cost back to a player.
-   *
-   * Each resource is floored separately so a partial refund can never round up
-   * into free material. `ratio` is clamped at 1: a refund must never mint
-   * resources, whatever a future caller passes.
-   */
-  private refundResources(player: PlayerState, cost: Resources, ratio: number) {
-    if (!(ratio > 0)) return;
-
-    const share = Math.min(1, ratio);
-    player.wood += Math.floor(cost.wood * share);
-    player.food += Math.floor(cost.food * share);
-    player.gold += Math.floor(cost.gold * share);
-    player.stone += Math.floor(cost.stone * share);
-  }
-
-  /**
-   * Resolves a building the client is allowed to command, or rejects the command.
-   *
-   * Cancelling training, cancelling a foundation and setting a rally point all
-   * open with the same existence + ownership checks. Keeping them in one place
-   * means a new command cannot forget one and quietly accept a foreign id.
-   */
-  private requireOwnedBuilding(client: Client, buildingId: string): BuildingState | null {
-    if (!buildingId) return null;
-
-    const building = this.state.buildings.get(buildingId);
-    if (!building) {
-      this.rejectCommand(client, 'Building no longer exists');
-      return null;
-    }
-    if (building.ownerId !== client.sessionId) {
-      this.rejectCommand(client, 'Not your building');
-      return null;
-    }
-    return building;
-  }
-
-  private handleAttackTarget(client: Client, payload: AttackTargetPayload) {
-    if (!payload.unitIds || payload.unitIds.length === 0) return;
-    if (payload.unitIds.length > MAX_SELECTION) {
-      this.rejectCommand(client, 'Too many units in one command');
-      return;
-    }
-
-    // The client chooses targetEntityId/targetType freely, so resolve the target
-    // from authoritative state and reject anything that is missing or friendly.
-    // Without this a client can order units to attack an ally or itself.
-    const target =
-      payload.targetType === 'unit'
-        ? this.state.units.get(payload.targetEntityId)
-        : payload.targetType === 'building'
-          ? this.state.buildings.get(payload.targetEntityId)
-          : undefined;
-
-    if (!target) {
-      this.rejectCommand(client, 'Target no longer exists');
-      return;
-    }
-    if (target.ownerId === client.sessionId) {
-      this.rejectCommand(client, 'Cannot attack your own units or buildings');
-      return;
-    }
-
-    payload.unitIds.forEach((uId) => {
-      const unit = this.state.units.get(uId);
-      if (unit && unit.ownerId === client.sessionId) {
-        // A new order replaces any queued path; leaving waypoints behind would
-        // make the unit resume an old route after the attack finishes.
-        unit.queueTargetX.clear();
-        unit.queueTargetY.clear();
-        // The chase is straight-line, so a route to the old destination would
-        // only pull the unit off the target if the fight ends.
-        unit.pathX.clear();
-        unit.pathY.clear();
-        // A plain attack has nothing to return to (CMD-01).
-        unit.previousActionState = '';
-        unit.targetEntityId = payload.targetEntityId;
-        unit.targetEntityType = payload.targetType;
-        unit.actionState = 'ATTACKING';
-      }
-    });
-  }
-
-  /**
-   * CMD-01: issues ATTACK_MOVE or PATROL to a grid point.
-   *
-   * Both orders reuse the formation layout of a plain move, so a squad keeps its
-   * shape while walking. PATROL also keeps each unit's current position as the
-   * other end of the route; the endpoints swap on every arrival (see `update`).
-   *
-   * The unit types are mixed freely: villagers may attack-move too, they just
-   * never auto-engage (`aggroRadius = 0`), which keeps a wood-cutting crew from
-   * charging a passing scout.
-   */
-  private handleAttackMove(client: Client, payload: AttackMovePayload, mode: 'ATTACK_MOVE' | 'PATROL') {
-    if (!payload?.unitIds || payload.unitIds.length === 0) return;
-    if (payload.unitIds.length > MAX_SELECTION) {
-      this.rejectCommand(client, 'Too many units in one command');
-      return;
-    }
-    if (!Number.isFinite(payload.targetGridX) || !Number.isFinite(payload.targetGridY)) {
-      this.rejectCommand(client, 'Invalid move target');
-      return;
-    }
-
-    // Same validate-then-spread order as `handleMoveUnits`: a foreign or repeated
-    // id must not leave a hole in the block.
-    const ownedUnits = this.collectOwnedUnits(client, payload.unitIds);
-    const targets = this.assignFormationTargets(ownedUnits, payload.targetGridX, payload.targetGridY);
-
-    ownedUnits.forEach((unit, idx) => {
-      const { x: targetX, y: targetY } = targets[idx];
-
-      unit.queueTargetX.clear();
-      unit.queueTargetY.clear();
-      unit.targetEntityId = '';
-      unit.targetEntityType = '';
-      unit.previousActionState = '';
-      this.setWalkTarget(unit, targetX, targetY);
-
-      if (mode === 'PATROL') {
-        // The route starts where the unit stands, so it walks back here once it
-        // reaches the clicked point.
-        unit.patrolX = unit.x;
-        unit.patrolY = unit.y;
-      }
-
-      unit.actionState = mode;
-    });
-  }
-
-  /**
-   * CMD-05: sends villagers to work on one of the player's own foundations.
-   *
-   * The client only says "these units, that building"; the server resolves both
-   * against authoritative state, so a foreign foundation is rejected instead of
-   * being built for its owner, and non-builders are dropped from the crew rather
-   * than being dragged to the site.
-   *
-   * Each builder is sent to its own point on the ring just outside the footprint
-   * (see `getBuildApproachPoint`), which is what stops a three-villager crew from
-   * stacking on one tile.
-   */
-  private handleBuildTarget(client: Client, payload: BuildTargetPayload) {
-    if (!payload?.unitIds || payload.unitIds.length === 0) return;
-    if (payload.unitIds.length > MAX_SELECTION) {
-      this.rejectCommand(client, 'Too many units in one command');
-      return;
-    }
-
-    const building = this.requireOwnedBuilding(client, payload.buildingId);
-    if (!building) return;
-    if (building.isConstructed) {
-      this.rejectCommand(client, 'Building is already finished');
-      return;
-    }
-    if (!BUILDING_BLUEPRINTS[building.type as BuildingType]) {
-      this.rejectCommand(client, 'Unknown building type');
-      return;
-    }
-
-    const builders = this.collectOwnedUnits(client, payload.unitIds).filter(
-      (unit) => (UNIT_BLUEPRINTS[unit.type as UnitType]?.buildPower ?? 0) > 0
-    );
-    if (builders.length === 0) {
-      this.rejectCommand(client, 'Only villagers can build');
-      return;
-    }
-
-    builders.forEach((unit, idx) => {
-      const approach = getBuildApproachPoint(unit, building, idx, builders.length);
-
-      unit.queueTargetX.clear();
-      unit.queueTargetY.clear();
-      unit.targetEntityId = building.id;
-      unit.targetEntityType = 'building';
-      unit.previousActionState = '';
-      this.setWalkTarget(unit, approach.x, approach.y);
-      unit.actionState = 'BUILDING';
-      // Leaving a woodline for a build site must not leave a stale retarget type
-      // behind, or a later depleted node would pull the villager back to it.
-      this.economy.clearHarvestOrder(unit.id);
-    });
-  }
-
   /**
    * Keeps a villager's `BUILDING` order in sync with the site each tick.
    *
@@ -1285,92 +794,6 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     if (!building.builderUnitIds.includes(unit.id)) {
       building.builderUnitIds.push(unit.id);
     }
-  }
-
-  private handleHarvestResource(client: Client, payload: HarvestResourcePayload) {
-    this.economy.handleHarvestOrder(client, payload);
-  }
-
-  /**
-   * Halts the given units where they stand.
-   *
-   * Stop cancels the unit's order (move / attack / harvest) and leaves it at its
-   * exact position. `targetX/targetY` are reset to the current position so the
-   * movement branch in `update()` has nothing left to walk towards.
-   *
-   * Per-unit timers are deliberately NOT cleared: they hold unit state, not
-   * order state. Dropping `atk_<id>` would reset the weapon cooldown, letting a
-   * client spam stop + attack to land a hit every tick instead of every
-   * cooldown. Leaving `harv_<id>` alone keeps partial harvest progress.
-   *
-   * Queued waypoints ARE cleared: they are the remaining part of the cancelled
-   * order, so resuming them later would undo the stop.
-   */
-  private handleStopUnits(client: Client, payload: StopUnitsPayload) {
-    if (!payload?.unitIds || payload.unitIds.length === 0) return;
-    if (payload.unitIds.length > MAX_SELECTION) {
-      this.rejectCommand(client, 'Too many units in one command');
-      return;
-    }
-
-    payload.unitIds.forEach((uId) => {
-      const unit = this.state.units.get(uId);
-      if (!unit || unit.ownerId !== client.sessionId) return;
-
-      unit.actionState = 'IDLE';
-      unit.targetEntityId = '';
-      unit.targetEntityType = '';
-      unit.previousActionState = '';
-      unit.targetX = unit.x;
-      unit.targetY = unit.y;
-      unit.pathX.clear();
-      unit.pathY.clear();
-      // SIM-02: the load stays in hand (it was already taken from the world),
-      // but the trip to a drop-off is cancelled with everything else.
-      unit.dropOffId = '';
-      unit.queueTargetX.clear();
-      unit.queueTargetY.clear();
-      this.economy.clearHarvestOrder(unit.id);
-    });
-  }
-
-  /**
-   * Sets where this building's newly trained units should walk to.
-   *
-   * Only the owner may set it: a foreign building id is refused outright rather
-   * than silently ignored, so a client bug surfaces as an error toast instead of
-   * a rally point that appears to work. Coordinates are validated against the
-   * map bounds because the client sends grid positions straight from the pointer
-   * and a stray click outside the terrain would otherwise create an unreachable
-   * target that traps every future unit in MOVING forever. Buildings that train
-   * nothing are refused too: a rally flag on a House is a promise the simulation
-   * can never keep.
-   */
-  private handleSetRallyPoint(client: Client, payload: SetRallyPointPayload) {
-    const building = this.requireOwnedBuilding(client, payload?.buildingId);
-    if (!building) return;
-
-    if (!canTrainUnitsAt(building.type as BuildingType)) {
-      this.rejectCommand(client, 'This building cannot train units');
-      return;
-    }
-
-    const gridX = Number(payload.gridX);
-    const gridY = Number(payload.gridY);
-    if (
-      !Number.isFinite(gridX) ||
-      !Number.isFinite(gridY) ||
-      gridX < 0 ||
-      gridY < 0 ||
-      gridX >= MAP_GRID_WIDTH ||
-      gridY >= MAP_GRID_HEIGHT
-    ) {
-      this.rejectCommand(client, 'Invalid rally point');
-      return;
-    }
-
-    building.rallyX = gridX;
-    building.rallyY = gridY;
   }
 
   /** Notify a client that a command was refused, so the UI can explain why. */
