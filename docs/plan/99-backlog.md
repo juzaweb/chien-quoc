@@ -87,3 +87,9 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
   6 s, 600 HP), `dropOffs` lần lượt là `wood` / `food` / `gold,stone`, sprite PNG 256x220
   + hotkey `Y/U/I`. Kiểm chứng bằng 4 test trong `WorldRoom.test.ts` (chọn camp gần nhất,
   camp từ chối loại hàng không phụ trách).
+- ~~**5 building gốc lệch style so với 3 camp**~~ — đã vẽ lại cả 5 bằng Canva theo đúng
+  style của camp, giữ nguyên kích thước sheet (TC 576x440, barracks 400x320, farm 384x192,
+  tower 160x360, house 256x220) nên `offsetY` không đổi. Nguồn matting + script dựng lại:
+  `scripts/raw_downloads/m_*_mat.png` → `scripts/rebuild_buildings_canva.py`. Đã chỉnh
+  `HP_BAR_Y` vì art mới không chạm mép trên sheet. Còn lệch nhẹ: bánh xe nước của `farm`
+  vẽ nhỏ hơn tỉ lệ của `mill` — sửa được nếu thấy khó chịu trong game.

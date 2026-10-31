@@ -38,12 +38,16 @@ const DEFAULT_ART = { textureKey: 'b_town_center', offsetY: -130 };
 /**
  * Top of the health / construction bar, in the container's local space. Each
  * building's roof sits at a different height, so the bar has to follow it.
+ *
+ * The numbers track the top of the artwork inside each shipped sheet, not the
+ * sheet rectangle: a sprite whose art does not reach the top row leaves a gap
+ * that the bar has to absorb.
  */
 const HP_BAR_Y: Partial<Record<BuildingType, number>> = {
-  TOWN_CENTER: -370,
+  TOWN_CENTER: -357,
   TOWER: -350,
-  BARRACKS: -270,
-  HOUSE: -190,
+  BARRACKS: -231,
+  HOUSE: -186,
   FARM: -100,
   LUMBER_CAMP: -190,
   MILL: -190,
