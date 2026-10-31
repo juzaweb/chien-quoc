@@ -63,12 +63,19 @@ const DOUBLE_CLICK_SAME_TYPE_MS = 350;
 const CANCEL_KEY_DEBOUNCE_MS = 250;
 
 /**
+ * CMD-01: same Phaser re-emit problem as the cancel key - one held `A` would
+ * queue dozens of attack-move orders. Two hundred and fifty ms is below a
+ * deliberate double tap and above the OS auto-repeat ramp.
+ */
+const ORDER_KEY_DEBOUNCE_MS = 250;
+
+/**
  * CMD-03: what the pointer currently points at, in terms of the order a right
  * click would issue. There are no AoE-style `.cur` assets yet, so each mode maps
  * to a built-in CSS cursor - the browser renders them at any DPI without us
  * shipping images.
  */
-type CursorMode = 'default' | 'attack' | 'harvest' | 'build-ok' | 'build-blocked';
+type CursorMode = 'default' | 'attack' | 'harvest' | 'build-ok' | 'build-blocked' | 'order';
 
 const CURSOR_CSS: Record<CursorMode, string> = {
   default: 'default',
@@ -79,7 +86,9 @@ const CURSOR_CSS: Record<CursorMode, string> = {
   // harvest affordance without custom art.
   harvest: 'copy',
   'build-ok': 'copy',
-  'build-blocked': 'not-allowed'
+  'build-blocked': 'not-allowed',
+  // An armed attack-move / patrol is asking for a destination: same affordance.
+  order: 'crosshair'
 };
 
 export interface SelectedEntityData {
@@ -131,8 +140,23 @@ export class WorldScene extends Phaser.Scene {
   private lastPointerWorld: { x: number; y: number } | null = null;
   private appliedCursorCss: string | null = null;
 
+  /**
+   * Whether a pointermove has ever reached the canvas. Phaser reports the pointer
+   * at (0,0) until then, which sits inside the top-left edge-scroll band - the
+   * camera would otherwise pan up-left on its own from the moment the scene
+   * starts, even with the mouse parked outside the game.
+   */
+  private hasPointerMoved = false;
+
   /** CMD-04b: timestamp of the last handled `Delete`, for key-repeat debounce. */
   private lastCancelKeyAt = 0;
+
+  /**
+   * CMD-01: an armed attack-move or patrol waiting for its destination click,
+   * plus the last arm keypress for the same re-emit debounce as the cancel key.
+   */
+  private pendingOrder: 'ATTACK_MOVE' | 'PATROL' | null = null;
+  private lastOrderKey: { mode: 'ATTACK_MOVE' | 'PATROL' | ''; at: number } = { mode: '', at: 0 };
 
   // Building placement preview
   public buildingToPlace: BuildingType | null = null;
@@ -319,6 +343,7 @@ export class WorldScene extends Phaser.Scene {
       this.bindIdleCycleKeys(this.input.keyboard);
       this.bindHomeKey(this.input.keyboard);
       this.bindCancelKey(this.input.keyboard);
+      this.bindOrderKeys(this.input.keyboard);
       // Held-modifier state for the waypoint preview; not a hotkey.
       this.shiftKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
     }
@@ -785,6 +810,9 @@ export class WorldScene extends Phaser.Scene {
       let desired: string | null;
       switch (actionState) {
         case 'MOVING':
+        // CMD-01: an attack-moving or patrolling unit is walking, fight or not.
+        case 'ATTACK_MOVE':
+        case 'PATROL':
           desired = walkAnim;
           break;
         case 'HARVESTING':
@@ -847,6 +875,7 @@ export class WorldScene extends Phaser.Scene {
     const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
     this.hoverGridCoord = screenToGrid(worldPoint.x, worldPoint.y);
     this.lastPointerWorld = { x: worldPoint.x, y: worldPoint.y };
+    this.hasPointerMoved = true;
 
     // Snap highlight to grid tile
     const snappedScreen = gridToScreen(this.hoverGridCoord.gridX, this.hoverGridCoord.gridY);
@@ -937,10 +966,25 @@ export class WorldScene extends Phaser.Scene {
     // button instead of trusting `rightButtonDown()`.
     const ctrlLeftClick = !!native && native.button === 0 && native.ctrlKey;
 
+    // CMD-01: an armed attack-move / patrol consumes the next left click as its
+    // destination, before anything can start a drag selection box. Placement mode
+    // keeps its click: the cursor is already promising a building there.
+    if (this.pendingOrder && !this.buildingToPlace && (pointer.leftButtonDown() || ctrlLeftClick)) {
+      this.commitPendingOrder(pointer);
+      return;
+    }
+
     if (pointer.rightButtonDown() && !ctrlLeftClick) {
       // Right Click
       if (this.buildingToPlace) {
         this.cancelBuildingPlacement();
+      } else if (this.pendingOrder) {
+        // Right click used to fire a normal order; with an order armed it only
+        // backs out, like cancelling a placement.
+        this.cancelPendingOrder();
+      } else if (native?.ctrlKey && native.button === 2) {
+        // CMD-01: Ctrl + right click is AoE2's attack-move.
+        this.issueAttackMoveOrder(pointer, 'ATTACK_MOVE');
       } else {
         this.handleRightClickCommand(pointer, !!native?.shiftKey);
       }
@@ -1082,6 +1126,10 @@ export class WorldScene extends Phaser.Scene {
       const blueprint = BUILDING_BLUEPRINTS[this.buildingToPlace];
       return this.isPlacementValid(grid.gridX, grid.gridY, blueprint) ? 'build-ok' : 'build-blocked';
     }
+
+    // CMD-01: an armed attack-move / patrol is waiting for a destination click,
+    // so the pointer is picking a point rather than targeting what is under it.
+    if (this.pendingOrder) return 'order';
 
     if (!this.room || this.selectedUnitIds.size === 0) return 'default';
 
@@ -1366,6 +1414,9 @@ export class WorldScene extends Phaser.Scene {
   }
 
   public clearSelection() {
+    // Escape routes through here (App.tsx), so an armed order is dropped too.
+    this.cancelPendingOrder();
+
     this.selectedUnitIds.forEach((uId) => {
       const container = this.unitSprites.get(uId);
       const ring = container?.getData('selectRing') as Phaser.GameObjects.Graphics;
@@ -1497,6 +1548,77 @@ export class WorldScene extends Phaser.Scene {
 
     this.room.send(NetworkMessage.CANCEL_BUILDING, { buildingId: this.selectedBuildingId });
     return true;
+  }
+
+  /**
+   * CMD-01: `A` arms attack-move, `P` arms patrol; the next left click picks the
+   * destination, which is exactly how AoE2's two-step order works.
+   *
+   * The keys are ignored with any modifier (Ctrl+A selects everything in the
+   * browser, Cmd+P prints), during placement, and with nothing selected - arming
+   * an order that can never be issued would just leave the cursor crosshaired.
+   */
+  private bindOrderKeys(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    const arm = (mode: 'ATTACK_MOVE' | 'PATROL') => (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      if (this.buildingToPlace) return;
+      if (this.selectedUnitIds.size === 0) return;
+
+      // Phaser re-emits keydown while the key is held down (see bindCancelKey).
+      const now = performance.now();
+      if (this.lastOrderKey.mode === mode && now - this.lastOrderKey.at < ORDER_KEY_DEBOUNCE_MS) return;
+      this.lastOrderKey = { mode, at: now };
+
+      event.preventDefault();
+      this.pendingOrder = mode;
+      this.refreshCursor();
+    };
+
+    keyboard.on('keydown-A', arm('ATTACK_MOVE'));
+    keyboard.on('keydown-P', arm('PATROL'));
+  }
+
+  /** Drops an armed order (right click, Escape) and restores the pointer. */
+  private cancelPendingOrder() {
+    if (!this.pendingOrder) return;
+    this.pendingOrder = null;
+    this.refreshCursor();
+  }
+
+  /**
+   * Turns the armed order into a message. The destination is read from the same
+   * pointer position the click used, so the order lands on the highlighted tile.
+   */
+  private commitPendingOrder(pointer: Phaser.Input.Pointer) {
+    const mode = this.pendingOrder;
+    this.pendingOrder = null;
+    this.refreshCursor();
+    if (mode) this.issueAttackMoveOrder(pointer, mode);
+  }
+
+  /**
+   * Sends ATTACK_MOVE or PATROL for the current selection.
+   *
+   * Out-of-map points are dropped here as well as on the server: a click on the
+   * terrain edge would otherwise cost a round-trip to be refused.
+   */
+  private issueAttackMoveOrder(pointer: Phaser.Input.Pointer, mode: 'ATTACK_MOVE' | 'PATROL') {
+    if (!this.room || this.selectedUnitIds.size === 0) return;
+    if (this.buildingToPlace) return;
+
+    const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
+    const grid = screenToGrid(worldPoint.x, worldPoint.y);
+    if (grid.gridX < 0 || grid.gridY < 0 || grid.gridX >= MAP_GRID_WIDTH || grid.gridY >= MAP_GRID_HEIGHT) {
+      return;
+    }
+
+    this.room.send(mode === 'PATROL' ? NetworkMessage.PATROL : NetworkMessage.ATTACK_MOVE, {
+      unitIds: Array.from(this.selectedUnitIds),
+      targetGridX: grid.gridX,
+      targetGridY: grid.gridY
+    });
+    this.showCommandFeedback(worldPoint.x, worldPoint.y, 0xef4444);
   }
 
   /**
@@ -1816,6 +1938,10 @@ export class WorldScene extends Phaser.Scene {
    */
   private applyEdgeScroll(cameraSpeed: number) {
     if (EDGE_SCROLL_SIZE_PX <= 0) return;
+    // Before the first real pointermove the pointer sits at (0,0), which is
+    // inside the edge band - scrolling on phantom input would drag the camera
+    // away from the base while the player is still looking at the page.
+    if (!this.hasPointerMoved) return;
 
     const pointer = this.input.activePointer;
     const width = this.scale.width;
@@ -1982,6 +2108,11 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private notifySelectionChange() {
+    // An armed order belongs to the units selected when it was given. Once they
+    // are all gone (killed, or replaced by a building) the next click would be
+    // swallowed with nothing to command, so the order is dropped first.
+    if (this.selectedUnitIds.size === 0) this.cancelPendingOrder();
+
     // Selection fingerprints the cursor (harvest needs an all-villager selection,
     // attack needs units), so recompute even when no React callback is wired.
     this.refreshCursor();

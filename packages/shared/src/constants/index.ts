@@ -118,6 +118,7 @@ export const UNIT_BLUEPRINTS: Record<UnitType, UnitBlueprint> = {
     attackRange: 1.2,
     attackCooldownMs: 1500,
     canHarvest: true,
+    aggroRadius: 0,
     description: 'Gathers resources and constructs buildings for your empire.'
   },
   SPEARMAN: {
@@ -131,6 +132,7 @@ export const UNIT_BLUEPRINTS: Record<UnitType, UnitBlueprint> = {
     attackRange: 1.5,
     attackCooldownMs: 1200,
     canHarvest: false,
+    aggroRadius: 6,
     description: 'Infantry unit equipped with spears, excellent against cavalry.'
   },
   ARCHER: {
@@ -144,6 +146,7 @@ export const UNIT_BLUEPRINTS: Record<UnitType, UnitBlueprint> = {
     attackRange: 5.0,
     attackCooldownMs: 1400,
     canHarvest: false,
+    aggroRadius: 6,
     description: 'Ranged unit capable of firing arrows from distance.'
   },
   CAVALRY: {
@@ -157,6 +160,7 @@ export const UNIT_BLUEPRINTS: Record<UnitType, UnitBlueprint> = {
     attackRange: 1.5,
     attackCooldownMs: 1000,
     canHarvest: false,
+    aggroRadius: 6,
     description: 'Fast and powerful mounted warrior suited for hit-and-run tactics.'
   }
 };

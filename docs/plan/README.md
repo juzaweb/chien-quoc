@@ -103,7 +103,7 @@ flowchart TD
 | CTL-05 | 1 | L | DONE |
 | CTL-06 | 1 | M | DONE |
 | CTL-07 | 1 | S | DONE |
-| CMD-01 | 2 | L | TODO |
+| CMD-01 | 2 | L | DONE |
 | CMD-02 | 2 | M | DONE |
 | CMD-03 | 2 | M | DONE |
 | CMD-04 | 2 | M | DONE |

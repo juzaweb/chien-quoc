@@ -42,6 +42,9 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 - **Cursor asset AoE-style** (`attack.cur`, `harvest.cur`, ...).
 - **Bảng đội hình / nhóm quân** bên phải HUD.
 - **Idle / total population tách riêng** trong HUD.
+- **Click vào HUD khi đang arm `A`/`P` không huỷ lệnh** — pointerdown không tới canvas nên lệnh
+  vẫn armed; người chơi phải click ra đất rồi chuột phải/Esc. Nên cho panel HUD gọi
+  `cancelPendingOrder()` để khớp cảm giác "click ra ngoài là huỷ".
 
 ## Kỹ thuật
 

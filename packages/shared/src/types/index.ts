@@ -13,7 +13,15 @@ export type UnitType = 'VILLAGER' | 'SPEARMAN' | 'ARCHER' | 'CAVALRY';
 
 export type ResourceNodeType = 'TREE' | 'GOLD_MINE' | 'STONE_MINE' | 'BERRY_BUSH';
 
-export type UnitActionState = 'IDLE' | 'MOVING' | 'ATTACKING' | 'HARVESTING';
+export type UnitActionState =
+  | 'IDLE'
+  | 'MOVING'
+  | 'ATTACKING'
+  | 'HARVESTING'
+  /** CMD-01: walk to a point, engaging every enemy met on the way. */
+  | 'ATTACK_MOVE'
+  /** CMD-01: walk back and forth between two points, engaging on the way. */
+  | 'PATROL';
 
 export interface BuildingBlueprint {
   type: BuildingType;
@@ -39,6 +47,12 @@ export interface UnitBlueprint {
   attackRange: number;
   attackCooldownMs: number;
   canHarvest: boolean;
+  /**
+   * CMD-01: distance in tiles at which the unit auto-engages an enemy while
+   * attack-moving or patrolling. `0` disables auto-engagement (villagers keep
+   * working instead of charging at the first soldier that walks past).
+   */
+  aggroRadius: number;
   description: string;
 }
 
@@ -74,6 +88,17 @@ export interface AttackTargetPayload {
 export interface HarvestResourcePayload {
   unitIds: string[];
   resourceNodeId: string;
+}
+
+/**
+ * CMD-01: shared payload for ATTACK_MOVE and PATROL. Both walk to the clicked
+ * grid cell while engaging enemies met on the way; PATROL keeps the unit's
+ * position at order time as the other end of the route.
+ */
+export interface AttackMovePayload {
+  unitIds: string[];
+  targetGridX: number;
+  targetGridY: number;
 }
 
 /**
@@ -121,6 +146,8 @@ export enum NetworkMessage {
   CANCEL_TRAIN = 'CANCEL_TRAIN',
   CANCEL_BUILDING = 'CANCEL_BUILDING',
   ATTACK_TARGET = 'ATTACK_TARGET',
+  ATTACK_MOVE = 'ATTACK_MOVE',
+  PATROL = 'PATROL',
   HARVEST_RESOURCE = 'HARVEST_RESOURCE',
   STOP_UNITS = 'STOP_UNITS',
   SET_RALLY_POINT = 'SET_RALLY_POINT',

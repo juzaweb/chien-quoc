@@ -21,5 +21,12 @@ export class UnitState extends Schema {
   // dedicated Schema per waypoint.
   @type(['number']) queueTargetX = new ArraySchema<number>();
   @type(['number']) queueTargetY = new ArraySchema<number>();
+  // CMD-01: the order a unit was executing before it broke off to fight. Empty
+  // for a plain ATTACK_TARGET, which has nothing to return to.
+  @type('string') previousActionState: string = '';
+  // CMD-01: the far end of a PATROL route. targetX/targetY hold the end the unit
+  // is currently walking towards; these two swap on every arrival.
+  @type('number') patrolX: number = 0;
+  @type('number') patrolY: number = 0;
 }
 

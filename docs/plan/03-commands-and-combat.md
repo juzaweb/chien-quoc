@@ -45,6 +45,108 @@ export interface AttackMovePayload {
 
 **File:** shared types + constants (`aggroRadius`), `UnitState.ts`, `WorldRoom.ts`, `WorldScene.ts`
 
+> **DONE.**
+> - Schema: `UnitState.previousActionState`, `patrolX`, `patrolY`. `previousActionState` is the
+>   order parked when the unit breaks off to fight; empty means a plain `ATTACK_TARGET`, which
+>   has nothing to return to. `patrolX/patrolY` hold the far end of the route, `targetX/targetY`
+>   the end currently walked towards — they swap on every arrival.
+> - `UnitActionState` thêm `'ATTACK_MOVE' | 'PATROL'`; `UnitBlueprint.aggroRadius` (tile):
+>   VILLAGER `0`, mọi lính `6`. Dân vẫn attack-move được (theo yêu cầu AoE), nhưng không tự
+>   lao vào địch nên tổ thợ mộc không bỏ cây chạy theo scout đi ngang.
+> - `ATTACK_MOVE` / `PATROL` dùng chung `AttackMovePayload` và **chung** handler
+>   `handleAttackMove(client, payload, mode)`: validate → lọc id (dedupe + đúng chủ) → xếp đội
+>   hình bằng `computeFormationOffsets` như `handleMoveUnits`, nên đội giữ đội hình khi vừa đi
+>   vừa đánh. `STOP`/move/attack/harvest đều reset `previousActionState` để một lệnh cũ không
+>   hồi sinh sau khi đổi ý.
+> - `update()`: trước mỗi bước đi, unit `ATTACK_MOVE`/`PATROL` có `aggroRadius > 0` quét
+>   `findNearestEnemyUnit(unit, aggroRadius)` (chỉ unit — không auto-đánh công trình đi ngang);
+>   thấy địch → lưu `previousActionState`, chuyển `ATTACKING` với target tạm.
+> - `endAttackOrder(unit)` thay cho các nhánh `IDLE`/`resumeQueuedWaypoint` cũ ở **5 chỗ**
+>   (target unit chết, target unit mất, building sập, building mất, và pre-check mỗi tick):
+>   khôi phục `ATTACK_MOVE`/`PATROL` nếu có, còn lại mới rơi về queue/IDLE. Thiếu pre-check
+>   thì unit bị xoá khỏi snapshot (bị người khác giết) sẽ đứng lại với target treo.
+> - Đến đích: `ATTACK_MOVE` → `IDLE` (đúng AoE); `PATROL` → swap 2 đầu và đi ngược lại; route
+>   có 2 đầu trùng nhau (< 0.15 tile) thì kết thúc thay vì ping-pong mỗi tick.
+> - Client: `A` arm attack-move, `P` arm patrol (đúng kiểu 2 bước của AoE), `Ctrl + chuột
+>   phải` = attack-move ngay. Đều gate theo: không modifier, không đang đặt nhà, có unit được
+>   chọn. Cursor `crosshair` khi đã arm (`CursorMode 'order'`); click trái trên canvas = chốt
+>   điểm, chuột phải/`Escape` = huỷ (Escape đi qua `clearSelection`). Click vào HUD panel thì
+>   **không** chốt lệnh (pointerdown không tới canvas), lệnh vẫn armed — chấp nhận được.
+> - `A`/`P` debounce 250 ms bằng `performance.now()` cùng lý do với `Delete`: Phaser
+>   re-emit `keydown` khi giữ phím, một lần nhấn sẽ arm/gửi hàng chục lần.
+> - Animation: `ATTACK_MOVE`/`PATROL` dùng `*_walk`.
+>
+> **Bug phát hiện khi test (đã sửa):** camera tự trôi lên-trên-trái ngay sau khi load. Nguyên
+> nhân: `applyEdgeScroll` đọc `input.activePointer`, mà trước pointermove thật đầu tiên Phaser
+> báo pointer ở `(0,0)` — nằm gọn trong band edge-scroll 24px, nên mỗi frame trừ `scrollX/Y`.
+> Đo được scroll `(1480,7555)` → `(-5341,735)` chỉ sau ~10 s đứng yên, tức camera rời khỏi base
+> trước khi người chơi chạm chuột. Sửa: cờ `hasPointerMoved` (set trong `handlePointerMove`),
+> `applyEdgeScroll` bỏ qua khi chưa có pointermove thật. Đây là bug có sẵn từ BUG-01b, không
+> phải do CMD-01.
+>
+> **Verify (socket probe thật, 2 account trên port 2568):**
+> - `ATTACK_MOVE` dân 3 tile: `ATTACK_MOVE` → đi → `IDLE` tại `(111.87,35)` với target `(112,35)`.
+> - `PATROL` dân 3 tile: `patrol=(106,38)`, `target=(109,38)` → tới đầu kia swap thành
+>   `target=(106,38)`, `patrol=(109,38)`, về `x=106.03` vẫn `PATROL` → `STOP` → `IDLE`,
+>   `target=(106.03,38)`.
+> - Payload có id của account khác: dân B **không** đổi gì, dân A trong cùng payload vẫn nhận
+>   lệnh (lọc theo owner, không phải reject cả lệnh).
+> - Spearman thật (Barracks 102,35 → train 7 s) attack-move từ `(102,38)` tới base B `(190,173)`:
+>   đi 62.2 s → `ATTACKING` với `previousActionState='ATTACK_MOVE'`, `entity=u_2338`; giết lần
+>   lượt 3 dân B (62.2 s → 79.7 s → 88.2 s, mỗi lần về `ATTACK_MOVE` rồi aggro lại mục tiêu gần
+>   nhất); sau mục tiêu cuối → `ATTACK_MOVE` → `IDLE` tại `(189.92,173.07)` đúng target
+>   `(190,173)`. 0 `ERROR_NOTIFICATION`.
+>
+> **Verify (browser thật, 1264×569, account thật + observer socket đọc state):**
+> - Box-select 3 dân → `A` → `pendingOrder=ATTACK_MOVE`, cursor `crosshair`; click trái
+>   → 3 unit `ATTACK_MOVE` target `(142.7,105.7)/(143.3,105.7)/(142.7,106.3)` (đội hình quanh
+>   ô click `(143,106)`).
+> - `P` + click → 3 unit `PATROL` với `patrol` = vị trí đứng, `target` = ô click; sau ~2.5 s
+>   swap (`target` quay về chỗ cũ, `patrol` = ô vừa tới), sau ~5 s đã đi ngược về `x≈142.6`,
+>   vẫn `PATROL`.
+> - `Ctrl + chuột phải` → 3 unit `ATTACK_MOVE` target `(139.7,104.7)`; chuột phải thường khi
+>   chưa arm → `MOVING` target `(140.7,105.7)` (không hồi quy).
+> - Chuột phải lúc đang arm → `pendingOrder=null`, cursor `default`, **không** gửi lệnh nào;
+>   `Escape` → pending `null`, selection 0.
+> - Camera sau reload: giữ `(1480,7555)` sau 9 s (trước fix: trôi tới `(-5341,735)`); rê chuột
+>   sát mép trái → `scrollX 1480 → 610` (edge scroll vẫn chạy).
+> - `tsc --noEmit` sạch client; server sạch sau `prisma generate` (trước đó lỗi implicit-any
+>   của Prisma client chưa sinh, không liên quan diff này).
+>
+> **Chưa phủ:** aggro chỉ nhắm unit, không nhắm công trình (cố ý); hành vi "click HUD khi đang
+> arm không huỷ lệnh" ghi backlog; chưa test patrol của lính có aggro thật trong browser (đã
+> test bằng socket cho attack-move, patrol chỉ test với dân `aggroRadius = 0`).
+>
+> **Review pass (sửa sau khi đọc lại diff):**
+> - `handleAttackMove` copy nguyên khối validate → dedupe → xếp đội hình → clamp của
+>   `handleMoveUnits`. CMD-02 đã chốt helper dùng chung nhưng chưa làm. Tách
+>   `collectOwnedUnits(client, unitIds)` và `assignFormationTargets(units, destX, destY)`; cả
+>   `MOVE_UNITS`, `ATTACK_MOVE`, `PATROL` giờ đi qua đúng một đường.
+> - Pre-check target chết gắn với `targetEntityId` khác rỗng, nên một unit `ATTACKING` mà mất
+>   target id sẽ đi tiếp tới `targetX` cũ với `stopDist = attackRange` và đứng đó vĩnh viễn.
+>   Tách `isAttackTargetAlive(unit)` coi "không có target" là target đã mất → đi chung nhánh
+>   `endAttackOrder`.
+> - Client: lệnh đã arm không thuộc về selection nào cả. Nếu toàn bộ unit được chọn chết (hoặc
+>   selection bị thay bằng nhà), `pendingOrder` còn sống thì cú click sau bị nuốt mà không
+>   gửi gì. `notifySelectionChange` giờ bỏ lệnh khi `selectedUnitIds` rỗng.
+> - Client: nhánh commit lệnh đã arm chạy trước nhánh placement. `setBuildingMode` xoá selection
+>   nên hiện tại không lọt, nhưng thêm `!this.buildingToPlace` để lần sau không phải nhớ.
+>
+> **Verify (sau review, server 2570 + browser 5173 trên code hiện tại):**
+> - Socket 2 account: 1 unit + 1 id lặp + 1 unit của account B → chỉ unit A nhận lệnh, target
+>   đúng `(57,168)`, B vẫn `IDLE`; 3 dân → khối `56.7/57.3 × 169.7/170.3`; `ATTACK_MOVE` 3 dân
+>   ra đúng target đội hình rồi `IDLE`; `PATROL` swap `target 163.7 ↔ patrol 173.7`; `STOP` →
+>   `IDLE/IDLE/IDLE`.
+> - Fight thật: Barracks cạnh base B → train spearman → `ATTACK_MOVE` tới dân B gần nhất
+>   (d = 6.40): aggro → `ATTACKING` với `previousActionState='ATTACK_MOVE'`, giết 3 dân B, quay
+>   lại `ATTACK_MOVE` rồi `IDLE` tại `(68.10,139.92)` đúng target `(68,140)`, 0 lỗi.
+> - Browser (1264×569): `A` + click → 3 unit `ATTACK_MOVE` đội hình `(54.7,165.7)/(55.3,165.7)/
+>   (54.7,166.3)`, cursor `crosshair`; `clearSelection` và `setBuildingMode('HOUSE')` đều xoá
+>   `pendingOrder` (sau đó click đặt House thật: wood 300 → 250, foundation xuất hiện, thoát
+>   placement); chuột phải lúc arm → `pending=null`, cursor `default`, không gửi lệnh; chuột
+>   phải thường → `MOVING`; `Ctrl + chuột phải` → `ATTACK_MOVE` đội hình.
+> - `tsc --noEmit` sạch cả `apps/server` và `apps/client`.
+
 ---
 
 ## CMD-02 — Formation

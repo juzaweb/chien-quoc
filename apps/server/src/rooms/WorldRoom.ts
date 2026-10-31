@@ -17,6 +17,7 @@ import {
   MoveUnitsPayload,
   TrainUnitPayload,
   AttackTargetPayload,
+  AttackMovePayload,
   HarvestResourcePayload,
   StopUnitsPayload,
   SetRallyPointPayload,
@@ -140,6 +141,14 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     this.onMessage(NetworkMessage.ATTACK_TARGET, (client, message: AttackTargetPayload) => {
       this.handleAttackTarget(client, message);
+    });
+
+    this.onMessage(NetworkMessage.ATTACK_MOVE, (client, message: AttackMovePayload) => {
+      this.handleAttackMove(client, message, 'ATTACK_MOVE');
+    });
+
+    this.onMessage(NetworkMessage.PATROL, (client, message: AttackMovePayload) => {
+      this.handleAttackMove(client, message, 'PATROL');
     });
 
     this.onMessage(NetworkMessage.HARVEST_RESOURCE, (client, message: HarvestResourcePayload) => {
@@ -769,6 +778,46 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.updatePlayerPopulation(client.sessionId);
   }
 
+  /**
+   * Keeps only the units this client actually owns, at most one entry per id.
+   *
+   * A repeated id would otherwise receive two orders and two formation cells,
+   * so the same unit would be counted twice in the block.
+   */
+  private collectOwnedUnits(client: Client, unitIds: string[]): UnitState[] {
+    const owned: UnitState[] = [];
+    const seen = new Set<string>();
+
+    unitIds.forEach((uId) => {
+      if (seen.has(uId)) return;
+      seen.add(uId);
+
+      const unit = this.state.units.get(uId);
+      if (unit && unit.ownerId === client.sessionId) owned.push(unit);
+    });
+
+    return owned;
+  }
+
+  /**
+   * Lays `units` out as a centred block around one grid destination (CMD-02) and
+   * clamps every cell to the map. Shared by every group order so a squad keeps
+   * its shape whether it walks or attack-moves.
+   *
+   * @returns One destination per input unit, in the same order.
+   */
+  private assignFormationTargets(
+    units: UnitState[],
+    destX: number,
+    destY: number
+  ): Array<{ x: number; y: number }> {
+    const offsets = computeFormationOffsets(units.length, FORMATION_SPACING);
+    return units.map((_, idx) => ({
+      x: Math.max(0, Math.min(MAP_GRID_WIDTH - 1, destX + offsets[idx].x)),
+      y: Math.max(0, Math.min(MAP_GRID_HEIGHT - 1, destY + offsets[idx].y))
+    }));
+  }
+
   private handleMoveUnits(client: Client, payload: MoveUnitsPayload) {
     if (!payload.unitIds || payload.unitIds.length === 0) return;
     if (payload.unitIds.length > MAX_SELECTION) {
@@ -788,24 +837,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     // Validate first, then spread the surviving units over one formation. Doing
     // it in a single pass would size the block off the payload length, so ids
     // that are foreign or stale would leave holes in the shape.
-    const ownedUnits: UnitState[] = [];
-    const seen = new Set<string>();
-    payload.unitIds.forEach((uId) => {
-      // A repeated id would otherwise receive two orders and two offsets,
-      // leaving the same unit counted twice in the block.
-      if (seen.has(uId)) return;
-      seen.add(uId);
-
-      const unit = this.state.units.get(uId);
-      if (unit && unit.ownerId === client.sessionId) ownedUnits.push(unit);
-    });
-
-    const offsets = computeFormationOffsets(ownedUnits.length, FORMATION_SPACING);
+    const ownedUnits = this.collectOwnedUnits(client, payload.unitIds);
+    const targets = this.assignFormationTargets(ownedUnits, payload.targetGridX, payload.targetGridY);
 
     ownedUnits.forEach((unit, idx) => {
-      const offset = offsets[idx];
-      const targetX = Math.max(0, Math.min(MAP_GRID_WIDTH - 1, payload.targetGridX + offset.x));
-      const targetY = Math.max(0, Math.min(MAP_GRID_HEIGHT - 1, payload.targetGridY + offset.y));
+      const { x: targetX, y: targetY } = targets[idx];
 
       if (queueWaypoint) {
         if (unit.queueTargetX.length >= MAX_QUEUED_WAYPOINTS) return;
@@ -826,6 +862,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       unit.actionState = 'MOVING';
       unit.targetEntityId = '';
       unit.targetEntityType = '';
+      unit.previousActionState = '';
     });
   }
 
@@ -873,9 +910,65 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private resumeQueuedWaypoint(unit: UnitState) {
     unit.targetEntityId = '';
     unit.targetEntityType = '';
+    unit.previousActionState = '';
     if (!this.advanceQueuedWaypoint(unit)) {
       unit.actionState = 'IDLE';
     }
+  }
+
+  /**
+   * Ends a fight (CMD-01).
+   *
+   * The unit remembers what it was doing before it engaged in
+   * `previousActionState`: an attack-move keeps walking to its destination, a
+   * patrol keeps walking its route. Anything else falls back to the queued
+   * waypoints, exactly like a finished plain attack.
+   */
+  private endAttackOrder(unit: UnitState) {
+    const resume = unit.previousActionState;
+    unit.previousActionState = '';
+
+    if (resume === 'ATTACK_MOVE' || resume === 'PATROL') {
+      unit.targetEntityId = '';
+      unit.targetEntityType = '';
+      unit.actionState = resume;
+      return;
+    }
+
+    this.resumeQueuedWaypoint(unit);
+  }
+
+  /**
+   * Whether the unit's attack target still exists in the snapshot. A unit with no
+   * target at all counts as gone, so an `ATTACKING` state can never survive
+   * without something to hit.
+   */
+  private isAttackTargetAlive(unit: UnitState): boolean {
+    if (!unit.targetEntityId) return false;
+    if (unit.targetEntityType === 'unit') return this.state.units.has(unit.targetEntityId);
+    if (unit.targetEntityType === 'building') return this.state.buildings.has(unit.targetEntityId);
+    return false;
+  }
+
+  /**
+   * Closest enemy unit within `radius` tiles, or null. Buildings are deliberately
+   * excluded: an attack-moving squad should engage soldiers, not stop to batter
+   * a wall it walks past.
+   */
+  private findNearestEnemyUnit(unit: UnitState, radius: number): UnitState | null {
+    let nearest: UnitState | null = null;
+    let nearestDist = radius;
+
+    this.state.units.forEach((other: UnitState) => {
+      if (other.ownerId === unit.ownerId) return;
+      const dist = Math.hypot(other.x - unit.x, other.y - unit.y);
+      if (dist <= nearestDist) {
+        nearest = other;
+        nearestDist = dist;
+      }
+    });
+
+    return nearest;
   }
 
   private handleTrainUnit(client: Client, payload: TrainUnitPayload) {
@@ -1062,10 +1155,61 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         // make the unit resume an old route after the attack finishes.
         unit.queueTargetX.clear();
         unit.queueTargetY.clear();
+        // A plain attack has nothing to return to (CMD-01).
+        unit.previousActionState = '';
         unit.targetEntityId = payload.targetEntityId;
         unit.targetEntityType = payload.targetType;
         unit.actionState = 'ATTACKING';
       }
+    });
+  }
+
+  /**
+   * CMD-01: issues ATTACK_MOVE or PATROL to a grid point.
+   *
+   * Both orders reuse the formation layout of a plain move, so a squad keeps its
+   * shape while walking. PATROL also keeps each unit's current position as the
+   * other end of the route; the endpoints swap on every arrival (see `update`).
+   *
+   * The unit types are mixed freely: villagers may attack-move too, they just
+   * never auto-engage (`aggroRadius = 0`), which keeps a wood-cutting crew from
+   * charging a passing scout.
+   */
+  private handleAttackMove(client: Client, payload: AttackMovePayload, mode: 'ATTACK_MOVE' | 'PATROL') {
+    if (!payload?.unitIds || payload.unitIds.length === 0) return;
+    if (payload.unitIds.length > MAX_SELECTION) {
+      this.rejectCommand(client, 'Too many units in one command');
+      return;
+    }
+    if (!Number.isFinite(payload.targetGridX) || !Number.isFinite(payload.targetGridY)) {
+      this.rejectCommand(client, 'Invalid move target');
+      return;
+    }
+
+    // Same validate-then-spread order as `handleMoveUnits`: a foreign or repeated
+    // id must not leave a hole in the block.
+    const ownedUnits = this.collectOwnedUnits(client, payload.unitIds);
+    const targets = this.assignFormationTargets(ownedUnits, payload.targetGridX, payload.targetGridY);
+
+    ownedUnits.forEach((unit, idx) => {
+      const { x: targetX, y: targetY } = targets[idx];
+
+      unit.queueTargetX.clear();
+      unit.queueTargetY.clear();
+      unit.targetEntityId = '';
+      unit.targetEntityType = '';
+      unit.previousActionState = '';
+      unit.targetX = targetX;
+      unit.targetY = targetY;
+
+      if (mode === 'PATROL') {
+        // The route starts where the unit stands, so it walks back here once it
+        // reaches the clicked point.
+        unit.patrolX = unit.x;
+        unit.patrolY = unit.y;
+      }
+
+      unit.actionState = mode;
     });
   }
 
@@ -1096,6 +1240,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         unit.targetX = resource.gridX;
         unit.targetY = resource.gridY;
         unit.actionState = 'HARVESTING';
+        unit.previousActionState = '';
         // Remember the type so a depleted node can hand the villager to the
         // nearest node of the same kind instead of leaving it idle (CMD-06).
         this.harvestTypeByUnit.set(unit.id, resource.resourceType);
@@ -1132,6 +1277,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       unit.actionState = 'IDLE';
       unit.targetEntityId = '';
       unit.targetEntityType = '';
+      unit.previousActionState = '';
       unit.targetX = unit.x;
       unit.targetY = unit.y;
       unit.queueTargetX.clear();
@@ -1214,8 +1360,39 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     // 2. Update units (movement, combat, harvesting)
     this.state.units.forEach((unit: UnitState) => {
+      const blueprint = UNIT_BLUEPRINTS[unit.type as UnitType];
+      if (!blueprint) return;
+
+      // CMD-01: before taking a step, an attack-moving or patrolling unit checks
+      // for the closest enemy inside its aggro radius. Switching to ATTACKING
+      // parks the current order in `previousActionState` so the unit picks it up
+      // again once the fight is over.
+      if ((unit.actionState === 'ATTACK_MOVE' || unit.actionState === 'PATROL') && blueprint.aggroRadius > 0) {
+        const enemy = this.findNearestEnemyUnit(unit, blueprint.aggroRadius);
+        if (enemy) {
+          unit.previousActionState = unit.actionState;
+          unit.actionState = 'ATTACKING';
+          unit.targetEntityId = enemy.id;
+          unit.targetEntityType = 'unit';
+        }
+      }
+
+      // A fight whose target was destroyed, killed by someone else or simply
+      // removed from the snapshot resumes the stored order instead of leaving the
+      // unit standing with a dangling target id. ATTACKING with no target at all
+      // is the same dead end, so it takes the same exit.
+      if (unit.actionState === 'ATTACKING' && !this.isAttackTargetAlive(unit)) {
+        this.endAttackOrder(unit);
+      }
+
       // Movement handling
-      if (unit.actionState === 'MOVING' || unit.actionState === 'HARVESTING' || unit.actionState === 'ATTACKING') {
+      if (
+        unit.actionState === 'MOVING' ||
+        unit.actionState === 'HARVESTING' ||
+        unit.actionState === 'ATTACKING' ||
+        unit.actionState === 'ATTACK_MOVE' ||
+        unit.actionState === 'PATROL'
+      ) {
         let destinationX = unit.targetX;
         let destinationY = unit.targetY;
 
@@ -1229,18 +1406,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
             if (targetUnit) {
               targetX = targetUnit.x;
               targetY = targetUnit.y;
-            } else {
-              unit.actionState = 'IDLE';
-              unit.targetEntityId = '';
             }
           } else if (unit.targetEntityType === 'building') {
             const targetBuilding = this.state.buildings.get(unit.targetEntityId);
             if (targetBuilding) {
               targetX = targetBuilding.gridX + targetBuilding.sizeX / 2;
               targetY = targetBuilding.gridY + targetBuilding.sizeY / 2;
-            } else {
-              unit.actionState = 'IDLE';
-              unit.targetEntityId = '';
             }
           }
           destinationX = targetX;
@@ -1251,8 +1422,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         const dy = destinationY - unit.y;
         const dist = Math.hypot(dx, dy);
 
-        const blueprint = UNIT_BLUEPRINTS[unit.type as UnitType];
-        const attackRange = blueprint ? blueprint.attackRange : 1.2;
+        const attackRange = blueprint.attackRange;
 
         const stopDist = unit.actionState === 'ATTACKING' ? attackRange : 0.15;
 
@@ -1261,9 +1431,24 @@ export class WorldRoom extends Room<{ state: WorldState }> {
           unit.x += (dx / dist) * moveStep;
           unit.y += (dy / dist) * moveStep;
         } else {
-          if (unit.actionState === 'MOVING') {
-            // Arrived: walk on to the next queued waypoint if there is one.
+          if (unit.actionState === 'MOVING' || unit.actionState === 'ATTACK_MOVE') {
+            // Arrived: walk on to the next queued waypoint if there is one. An
+            // attack-move ends here (IDLE), like in AoE.
             this.resumeQueuedWaypoint(unit);
+          } else if (unit.actionState === 'PATROL') {
+            // Reached one end of the route: swap the endpoints and head back. A
+            // route whose ends collapse onto the same tile would otherwise ping
+            // pong every tick, so it ends instead.
+            const nextX = unit.patrolX;
+            const nextY = unit.patrolY;
+            if (Math.hypot(nextX - unit.x, nextY - unit.y) <= 0.15) {
+              this.resumeQueuedWaypoint(unit);
+            } else {
+              unit.patrolX = unit.targetX;
+              unit.patrolY = unit.targetY;
+              unit.targetX = nextX;
+              unit.targetY = nextY;
+            }
           }
         }
       }
@@ -1345,12 +1530,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
               // Transient harvest state must not outlive the unit.
               this.harvestTypeByUnit.delete(targetUnit.id);
               this.updatePlayerPopulation(victimOwner);
-              this.resumeQueuedWaypoint(unit);
+              this.endAttackOrder(unit);
             }
           }
         } else {
           // Target died or changed hands: the order is over.
-          this.resumeQueuedWaypoint(unit);
+          this.endAttackOrder(unit);
         }
       } else if (unit.targetEntityType === 'building') {
         const targetBuilding = this.state.buildings.get(unit.targetEntityId);
@@ -1366,12 +1551,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
               const bOwner = targetBuilding.ownerId;
               this.state.buildings.delete(targetBuilding.id);
               this.updatePlayerPopulation(bOwner);
-              this.resumeQueuedWaypoint(unit);
+              this.endAttackOrder(unit);
             }
           }
         } else {
           // Building destroyed or captured by its owner: order over.
-          this.resumeQueuedWaypoint(unit);
+          this.endAttackOrder(unit);
         }
       }
     } else {
