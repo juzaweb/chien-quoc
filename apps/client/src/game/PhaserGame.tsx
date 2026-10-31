@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import * as Phaser from 'phaser';
 import { Room } from '@colyseus/sdk';
-import { WorldScene, SelectedEntityData } from './scenes/WorldScene.js';
+import { WorldScene, SelectedEntityData, ControlGroupSummary } from './scenes/WorldScene.js';
 import { BuildingType } from '@chien-quoc/shared';
 
 interface PhaserGameProps {
@@ -13,6 +13,8 @@ interface PhaserGameProps {
   onBuildingHotkey: (type: BuildingType) => void;
   /** ECO-02: the number of this player's idle villagers changed. */
   onIdleVillagersChange: (count: number) => void;
+  /** UIX-03: the `Ctrl+1..9` rosters changed. */
+  onControlGroupsChange: (groups: ControlGroupSummary[]) => void;
   gameRef: React.MutableRefObject<Phaser.Game | null>;
   sceneRef: React.MutableRefObject<WorldScene | null>;
 }
@@ -24,6 +26,7 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
   onPlacementCancelled,
   onBuildingHotkey,
   onIdleVillagersChange,
+  onControlGroupsChange,
   gameRef,
   sceneRef
 }) => {
@@ -33,10 +36,12 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
   const roomRef = useRef(room);
   const onBuildingHotkeyRef = useRef(onBuildingHotkey);
   const onIdleVillagersRef = useRef(onIdleVillagersChange);
+  const onControlGroupsRef = useRef(onControlGroupsChange);
   playerNameRef.current = playerName;
   roomRef.current = room;
   onBuildingHotkeyRef.current = onBuildingHotkey;
   onIdleVillagersRef.current = onIdleVillagersChange;
+  onControlGroupsRef.current = onControlGroupsChange;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -96,6 +101,7 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
         // bootstrap closure only runs once.
         scene.onBuildingHotkey = (type) => onBuildingHotkeyRef.current(type);
         scene.onIdleVillagersChange = (count) => onIdleVillagersRef.current(count);
+        scene.onControlGroupsChange = (groups) => onControlGroupsRef.current(groups);
 
         // Dev-only handle so browser tests can inspect state that the React HUD
         // does not expose (selection sets, camera, sprites).

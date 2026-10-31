@@ -16,7 +16,9 @@ import { CursorController } from '../input/CursorController.js';
 import { PlacementController } from '../input/PlacementController.js';
 import { SelectionController } from '../input/SelectionController.js';
 import type { BoxSelectFilter } from '../input/SelectionController.js';
-import { applyEdgeScroll, MiddleDragPan } from '../input/cameraInput.js';
+import { applyEdgeScroll } from '../input/cameraInput.js';
+import { CameraController } from '../input/CameraController.js';
+import { installHudPointerGuard } from '../input/hudPointerGuard.js';
 import { EntityRenderer } from '../render/EntityRenderer.js';
 import { FocusIndicator } from '../render/FocusIndicator.js';
 import { TerrainLayer } from '../render/TerrainLayer.js';
@@ -33,14 +35,6 @@ import { TerrainLayer } from '../render/TerrainLayer.js';
  */
 const CLICK_DRAG_THRESHOLD_WORLD_PX = 8;
 const CLICK_DRAG_MIN_SCREEN_PX = 6;
-
-/** Zoom range, shared by the wheel and the `+`/`-` hotkeys. */
-const ZOOM_MIN = 0.4;
-const ZOOM_MAX = 2.2;
-/** Wheel pixels to zoom units. */
-const WHEEL_ZOOM_SENSITIVITY = 0.001;
-/** Multiplier applied per `+`/`-` press: one press reads as a deliberate step. */
-const KEY_ZOOM_STEP = 1.2;
 
 /**
  * ECO-02: how often the idle-villager count is recomputed, in milliseconds.
@@ -77,6 +71,17 @@ function selectionModsFor(event: MouseEvent | undefined): SelectionMods {
     selectSameType: ctrl,
     filter: event?.altKey ? 'villager' : ctrl ? 'military' : 'all'
   };
+}
+
+/**
+ * UIX-03: one control group as the HUD renders it. `breakdown` is the unit mix,
+ * so the panel can read "4 · Spearman 3, Villager 1" without the HUD knowing
+ * anything about the scene's registries.
+ */
+export interface ControlGroupSummary {
+  index: number;
+  count: number;
+  breakdown: Array<{ type: string; count: number }>;
 }
 
 export interface SelectedEntityData {
@@ -165,11 +170,8 @@ export class WorldScene extends Phaser.Scene {
   private dragStartScreen: { x: number; y: number } = { x: 0, y: 0 };
   private dragSelectionGraphics!: Phaser.GameObjects.Graphics;
 
-  /** Middle-button drag pan (AoE2: hold the middle button and drag the map). */
-  private middleDrag = new MiddleDragPan();
-
-  /** Camera bookmarks by slot, saved with `Ctrl/Shift+F2..F4` and recalled with `F2..F4`. */
-  private readonly cameraBookmarks = new Map<number, { x: number; y: number; zoom: number }>();
+  /** Middle-button drag panning, edge scroll, zoom and camera bookmarks. */
+  public cameraControl!: CameraController;
 
   // CTL-02: modifiers are captured on pointerdown because pointerup can report
   // them differently (the browser fires `contextmenu` early for ctrl-click).
@@ -189,6 +191,11 @@ export class WorldScene extends Phaser.Scene {
    * changes, so the HUD can show the AoE idle-counter without scanning state.
    */
   public onIdleVillagersChange: ((count: number) => void) | null = null;
+  /**
+   * UIX-03: published whenever the `Ctrl+1..9` rosters change (assign, recall,
+   * a member dying), so the right-hand group panel mirrors the real groups.
+   */
+  public onControlGroupsChange: ((groups: ControlGroupSummary[]) => void) | null = null;
   /** Last `hp|carrying|actionState` string published to the entity panel. */
   private lastUnitDetailSignature = '';
   /** ECO-02: last count published, and when the next scan is allowed. */
@@ -304,6 +311,10 @@ export class WorldScene extends Phaser.Scene {
     this.commands = new CommandController(this);
     this.commands.createOverlays();
 
+    // 4b-2. Camera: wheel zoom, +/- steps, bookmarks and middle-drag panning.
+    // Built after `commands` because a saved bookmark flashes feedback through it.
+    this.cameraControl = new CameraController(this);
+
     // 4c. Focus-fire marker (CMB-03), under the drag box like every other overlay
     this.focus = new FocusIndicator(this);
 
@@ -331,7 +342,7 @@ export class WorldScene extends Phaser.Scene {
 
     // Mouse wheel zoom
     this.input.on('wheel', (pointer: Phaser.Input.Pointer, gameObjects: any, deltaX: number, deltaY: number) => {
-      this.zoomTo(this.cameras.main.zoom - deltaY * WHEEL_ZOOM_SENSITIVITY);
+      this.cameraControl.handleWheel(deltaY);
     });
 
     // Pointer events for selection and actions
@@ -353,6 +364,37 @@ export class WorldScene extends Phaser.Scene {
     // next release inside the canvas.
     this.input.on('pointerupoutside', (pointer: Phaser.Input.Pointer) => {
       this.handlePointerUp(pointer);
+    });
+
+    // Presses and releases that land on a React HUD panel never reach the canvas,
+    // so neither Phaser handler above fires. UIX-01: treat an off-canvas press as
+    // "clicked the world chrome" — the armed order or the placement ghost must
+    // drop, and an in-flight box selection must finish instead of leaving its
+    // rectangle painted on screen.
+    installHudPointerGuard(this.game, this.events, {
+      onPressOutside: () => {
+        if (this.buildingToPlace) {
+          this.placement.cancel();
+        } else if (this.commands.pendingOrder) {
+          this.commands.cancelPendingOrder();
+        }
+      },
+      onReleaseOutside: () => {
+        // A middle-button pan can also end over a panel; stop it unconditionally.
+        this.cameraControl.endMiddleDrag();
+        // `outside` so a sub-threshold drag is not read as a click: the pointer
+        // then sits over a panel, and `handleClick` would hit-test (or clear the
+        // selection through) whatever is painted underneath it.
+        if (this.isDragSelecting) this.handlePointerUp(this.input.activePointer, true);
+      },
+      onPointerCancelled: () => {
+        // The browser aborted the gesture (touch interruption, window drag-out).
+        // A drawn box still completes — the player did drag it — but the
+        // sub-threshold click is skipped for the same reason as above, and the
+        // pan must stop because no `pointerup` is coming.
+        this.cameraControl.endMiddleDrag();
+        if (this.isDragSelecting) this.handlePointerUp(this.input.activePointer, true);
+      }
     });
 
     // Bind room events if room already passed
@@ -381,6 +423,9 @@ export class WorldScene extends Phaser.Scene {
       // Fresh world snapshot: allow re-centering on the base.
       this.hasCenteredOnSpawn = false;
       this.centerAttempts = 0;
+      // UIX-03: group members belong to the old world; their ids are meaningless
+      // in the new snapshot.
+      this.commands?.resetControlGroups();
     }
 
     // Callbacks belong to a Room instance, so a new instance always needs binding.
@@ -517,7 +562,7 @@ export class WorldScene extends Phaser.Scene {
     // Middle-drag pan moves the camera under a still pointer, so the world point
     // below the cursor is recomputed first: the cursor and the waypoint preview
     // both read it, and a stale one would pin them to the tile left behind.
-    const panning = this.middleDrag.update(this.cameras.main, pointer);
+    const panning = this.cameraControl.updateMiddleDrag(pointer);
 
     const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
     const hoverGridCoord = screenToGrid(worldPoint.x, worldPoint.y);
@@ -591,7 +636,7 @@ export class WorldScene extends Phaser.Scene {
     if (pointer.middleButtonDown()) {
       native?.preventDefault();
       if (!this.buildingToPlace) {
-        this.middleDrag.begin(pointer);
+        this.cameraControl.beginMiddleDrag(pointer);
         return;
       }
     }
@@ -638,10 +683,16 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private handlePointerUp(pointer: Phaser.Input.Pointer) {
+  /**
+   * @param outside true when the button came up off-canvas (over a HUD panel, or
+   *   after a cancelled gesture). A box selection still finishes at the last
+   *   on-canvas position, but a sub-threshold drag must not become a click-select:
+   *   the pointer coordinates then point at the panel, not at the world.
+   */
+  private handlePointerUp(pointer: Phaser.Input.Pointer, outside = false) {
     // The middle button can be released outside the drag state (e.g. pressed
     // while placing a building), so this is unconditional.
-    this.middleDrag.end();
+    this.cameraControl.endMiddleDrag();
 
     if (this.isDragSelecting) {
       this.isDragSelecting = false;
@@ -665,7 +716,7 @@ export class WorldScene extends Phaser.Scene {
           mods.additive,
           mods.filter
         );
-      } else {
+      } else if (!outside) {
         // Single Click Selection
         this.selection.handleClick(pointer, mods.additive, mods.selectSameType);
       }
@@ -704,54 +755,22 @@ export class WorldScene extends Phaser.Scene {
     this.commands.cycleToIdleUnit(category);
   }
 
+  /**
+   * UIX-03: recalling a group from the HUD panel is the same action as pressing
+   * its digit, including the second-press camera jump.
+   */
+  public selectControlGroup(index: number) {
+    this.commands.recallControlGroup(index);
+  }
+
   public panTo(gridX: number, gridY: number) {
     const screenPos = gridToScreen(gridX, gridY);
     this.cameras.main.pan(screenPos.x, screenPos.y, 350, 'Power2');
   }
 
-  /** Clamped zoom, shared by the wheel and the `+`/`-` hotkeys. */
-  public zoomTo(zoom: number) {
-    this.cameras.main.setZoom(Phaser.Math.Clamp(zoom, ZOOM_MIN, ZOOM_MAX));
-  }
-
-  /**
-   * One `+`/`-` press. Multiplicative so a step feels the same at every zoom,
-   * and clamped to the same range the wheel uses.
-   *
-   * @param steps `1` zooms in, `-1` zooms out.
-   */
-  public zoomBySteps(steps: number) {
-    this.zoomTo(this.cameras.main.zoom * Math.pow(KEY_ZOOM_STEP, steps));
-  }
-
-  /** Stores the current camera centre and zoom under `slot` (1-based). */
-  public saveCameraBookmark(slot: number) {
-    const camera = this.cameras.main;
-    this.cameraBookmarks.set(slot, { x: camera.midPoint.x, y: camera.midPoint.y, zoom: camera.zoom });
-    this.commands.showFeedback(camera.midPoint.x, camera.midPoint.y, 0x22c55e);
-  }
-
-  /**
-   * Jumps to a saved camera position, like AoE2's `F2..F4`.
-   *
-   * The zoom is restored before the centre so `centerOn` works in the final
-   * projection; doing it the other way round would land the camera off-centre.
-   *
-   * @returns false when the slot was never saved, so the caller can leave the
-   *   keystroke unclaimed.
-   */
-  public recallCameraBookmark(slot: number): boolean {
-    const bookmark = this.cameraBookmarks.get(slot);
-    if (!bookmark) return false;
-
-    // A minimap / `H` recentre is a 350 ms pan tween; leaving it running would
-    // drag the camera off the bookmark right after `centerOn`.
-    this.cameras.main.panEffect.reset();
-    this.zoomTo(bookmark.zoom);
-    this.cameras.main.centerOn(bookmark.x, bookmark.y);
-    this.commands.showFeedback(bookmark.x, bookmark.y, 0x38bdf8);
-    return true;
-  }
+  // The old camera wrappers (`zoomTo`, `zoomBySteps`, `saveCameraBookmark`,
+  // `recallCameraBookmark`) were pass-throughs to `cameraControl`; removed so
+  // there is one handle, not two layers claiming ownership of the zoom range.
 
   /**
    * Publishes the current selection to React and lets the cursor follow it.

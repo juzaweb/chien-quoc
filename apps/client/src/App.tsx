@@ -10,12 +10,13 @@ import {
   Resources,
   UnitType
 } from '@chien-quoc/shared';
-import { WorldScene, SelectedEntityData } from './game/scenes/WorldScene.js';
+import { WorldScene, SelectedEntityData, ControlGroupSummary } from './game/scenes/WorldScene.js';
 import { PhaserGame } from './game/PhaserGame.js';
 import { HUD } from './components/HUD.js';
 import { BuildMenu } from './components/BuildMenu.js';
 import { EntityDetails } from './components/EntityDetails.js';
 import { Minimap } from './components/Minimap.js';
+import { ControlGroups } from './components/ControlGroups.js';
 import { AuthScreen } from './components/AuthScreen.js';
 import {
   AuthUser,
@@ -43,6 +44,8 @@ export const App: React.FC = () => {
   const [populationCap, setPopulationCap] = useState<number>(INITIAL_POPULATION_CAP);
   /** ECO-02: idle villagers, published by the scene when the count changes. */
   const [idleVillagers, setIdleVillagers] = useState<number>(0);
+  /** UIX-03: `Ctrl+1..9` rosters, published by the scene on every change. */
+  const [controlGroups, setControlGroups] = useState<ControlGroupSummary[]>([]);
 
   // Selection & Placement
   const [selectedEntity, setSelectedEntity] = useState<SelectedEntityData | null>(null);
@@ -172,6 +175,7 @@ export const App: React.FC = () => {
     setIsJoined(false);
     setIsConnected(false);
     setSelectedEntity(null);
+    setControlGroups([]);
     setAuthUser(null);
   };
 
@@ -242,6 +246,7 @@ export const App: React.FC = () => {
           onPlacementCancelled={() => setActiveBuildingType(null)}
           onBuildingHotkey={handleSelectBuilding}
           onIdleVillagersChange={setIdleVillagers}
+          onControlGroupsChange={setControlGroups}
           gameRef={gameRef}
           sceneRef={sceneRef}
         />
@@ -323,6 +328,16 @@ export const App: React.FC = () => {
         >
           Đăng xuất
         </button>
+      )}
+
+      {/* UIX-03: control-group rosters, click to recall */}
+      {isJoined && (
+        <div className="absolute top-28 right-2 z-20">
+          <ControlGroups
+            groups={controlGroups}
+            onSelectGroup={(index) => sceneRef.current?.selectControlGroup(index)}
+          />
+        </div>
       )}
     </div>
   );

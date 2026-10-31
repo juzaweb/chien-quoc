@@ -47,20 +47,15 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 
 ## UI / UX
 
-- **Nút Cancel trong panel train** (đã tách ra CMD-04a nếu ưu tiên).
-- **Tooltip AoE-style** với hotkey, cost, thời gian huấn luyện.
 - **Âm thanh phản hồi lệnh** ("Yes, sir!", tiếng kiếm, tiếng chặt cây).
 - **Cursor asset AoE-style** (`attack.cur`, `harvest.cur`, ...).
-- **Bảng đội hình / nhóm quân** bên phải HUD.
-- **Idle / total population tách riêng** trong HUD.
-- **Click vào HUD khi đang arm `A`/`P` không huỷ lệnh** — pointerdown không tới canvas nên lệnh
-  vẫn armed; người chơi phải click ra đất rồi chuột phải/Esc. Nên cho panel HUD gọi
-  `cancelPendingOrder()` để khớp cảm giác "click ra ngoài là huỷ".
-- **Mouseup trên HUD không tới canvas** (cùng gốc với mục trên): nhả chuột khi kết thúc
-  quét hộp trên một panel HUD thì `isDragSelecting` không được reset — hình chữ nhật còn
-  nằm đó tới lần click kế tiếp. Kéo camera bằng chuột giữa đã tự chữa (guard theo
-  `pointer.middleButtonDown()` trong `MiddleDragPan.update`), còn quét hộp thì chưa: nên
-  bind thêm mouseup ở `window` hoặc dùng cùng kiểu guard trong `handlePointerMove`.
+- **Hotkey huấn luyện lính** — `Q/W/E/R/T` đã là menu xây dựng toàn cục, nên phím cho
+  lính cần một lớp ngữ cảnh riêng (chọn nhà nào thì phím đổi nghĩa). Tooltip đã ghi cost
+  và thời gian huấn luyện (UIX-02), chỉ còn thiếu phím.
+- **Nhóm quân chứa cả công trình** — panel nhóm (UIX-03) hiện chỉ đếm unit; AoE2 cho
+  gán TC/nhà vào nhóm. Cần mở rộng `controlGroups` sang id công trình + đổi cách recall
+  (hiện `selection.clear()` rồi chỉ thêm unit).
+- **Sắp xếp lại thứ tự nhóm** — panel chỉ hiển thị theo số 1..9, chưa kéo-thả được.
 
 ## Kỹ thuật
 
@@ -68,9 +63,6 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
   / `p.units` rồi dựng `Schema`) là khối liền mạch dễ tách nhất thành
   `rooms/worldBootstrap.ts`; đợt ECO-01 đã gỡ bớt phần trùng (nạp tài nguyên nguyên liệu
   sang `gatherables.ts`) nhưng file vẫn còn trên ngưỡng.
-- **`WorldScene.ts` đã 968 dòng** (ngưỡng soi là ~1000): phần camera (`zoomTo`,
-  `zoomBySteps`, `saveCameraBookmark`, `recallCameraBookmark`, `MiddleDragPan`) nên tách
-  thành `input/CameraController.ts` trước khi thêm gì nữa vào scene.
 - **Client prediction** cho lệnh move (hiện chờ snapshot → cảm giác trễ ~50ms).
 - **Snapshot diff / interpolation** mượt hơn — hiện `Phaser.Math.Linear(..., 0.25)` cố định,
   không phụ thuộc delta → tốc độ lerp thay đổi theo FPS.

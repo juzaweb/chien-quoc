@@ -8,7 +8,7 @@ import {
   nextUnitStance
 } from '@chien-quoc/shared';
 import * as Phaser from 'phaser';
-import type { WorldScene } from '../scenes/WorldScene.js';
+import type { ControlGroupSummary, WorldScene } from '../scenes/WorldScene.js';
 import { findBuildingAt, findOwnFoundationAt, findOwnGatherableAt, findResourceAt, findUnitAt } from './hitTest.js';
 import { guardKey } from './keyGuard.js';
 import { pointerWorldGrid, pointerWorldPoint } from './pointer.js';
@@ -353,7 +353,7 @@ export class CommandController {
       guardKey((event: KeyboardEvent) => {
         if (event.ctrlKey || event.metaKey || event.altKey) return false;
         event.preventDefault();
-        this.scene.zoomBySteps(direction);
+        this.scene.cameraControl.zoomBySteps(direction);
         return true;
       }, ZOOM_KEY_REPEAT_MS);
 
@@ -382,12 +382,12 @@ export class CommandController {
     CAMERA_BOOKMARK_KEYS.forEach(({ name, slot }) => {
       const recall = guardKey((event: KeyboardEvent) => {
         event.preventDefault();
-        return this.scene.recallCameraBookmark(slot);
+        return this.scene.cameraControl.recallBookmark(slot);
       });
 
       const save = guardKey((event: KeyboardEvent) => {
         event.preventDefault();
-        this.scene.saveCameraBookmark(slot);
+        this.scene.cameraControl.saveBookmark(slot);
         return true;
       });
 
@@ -874,7 +874,69 @@ export class CommandController {
 
   /** Drops a dead/despawned unit from every control group. */
   forgetUnit(unitId: string) {
-    this.controlGroups.forEach((ids) => ids.delete(unitId));
+    // Only republish when a roster actually lost a member: `onRemove` fires once
+    // per dead unit, and each publish hands React a brand-new array.
+    let changed = false;
+    this.controlGroups.forEach((ids) => {
+      if (ids.delete(unitId)) changed = true;
+    });
+    if (changed) this.publishControlGroups();
+  }
+
+  /**
+   * UIX-03: drops every stored roster. Called when the scene binds a new world
+   * snapshot, where the old entity ids cannot resolve to anything.
+   */
+  resetControlGroups() {
+    this.controlGroups.clear();
+    // Published directly rather than through `publishControlGroups`: an empty
+    // roster needs no snapshot lookup, and the snapshot may not be bound yet.
+    this.scene.onControlGroupsChange?.([]);
+  }
+
+  /**
+   * UIX-03: mirrors the rosters into React.
+   *
+   * Dead ids are pruned first: a group keeps its id set across deaths, and a
+   * panel showing "4 units" for a group of two survivors would be a lie. The
+   * publish is push-based (called on every mutation) rather than polled, so the
+   * HUD never scans the snapshot.
+   */
+  private publishControlGroups() {
+    const units = this.scene.room?.state.units;
+    // No snapshot means the rosters cannot be verified; keep the last published
+    // list instead of telling the HUD every group died.
+    if (!units) return;
+
+    const groups: ControlGroupSummary[] = [];
+
+    this.controlGroups.forEach((ids, index) => {
+      const breakdown = new Map<string, number>();
+      const dead: string[] = [];
+      ids.forEach((unitId) => {
+        const unit = units.get(unitId);
+        if (!unit) {
+          dead.push(unitId);
+          return;
+        }
+        breakdown.set(unit.type, (breakdown.get(unit.type) ?? 0) + 1);
+      });
+      // Deleted after the scan, not during it: mutating a Set mid-`forEach` is
+      // legal but reads as a bug to everyone who looks at this next.
+      dead.forEach((unitId) => ids.delete(unitId));
+      if (ids.size === 0) return;
+
+      groups.push({
+        index,
+        count: ids.size,
+        breakdown: Array.from(breakdown, ([type, count]) => ({ type, count })).sort(
+          (a, b) => b.count - a.count
+        )
+      });
+    });
+
+    groups.sort((a, b) => a.index - b.index);
+    this.scene.onControlGroupsChange?.(groups);
   }
 
   private groupControlGroup(index: number) {
@@ -888,9 +950,14 @@ export class CommandController {
     });
     // Assigning with nothing selected empties the group, like AoE2.
     this.controlGroups.set(index, ids);
+    this.publishControlGroups();
   }
 
-  private recallControlGroup(index: number) {
+  /**
+   * UIX-03: `Ctrl+1..9` recall. Public so the HUD group panel runs the exact same
+   * path as the digit key, including the second-press camera jump.
+   */
+  recallControlGroup(index: number) {
     const scene = this.scene;
     const ids = this.controlGroups.get(index);
     if (!ids || ids.size === 0) return;
@@ -921,5 +988,8 @@ export class CommandController {
     if (centerCamera && count > 0) {
       scene.cameras.main.pan(sumX / count, sumY / count, 250, 'Power2');
     }
+
+    // Recall is also when a group sheds members that died since the last look.
+    this.publishControlGroups();
   }
 }

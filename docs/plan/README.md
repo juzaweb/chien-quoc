@@ -9,6 +9,7 @@ theo từng bước nhỏ, mỗi bước là một thay đổi độc lập có 
 - Phase 2 — Command & combat: [`03-commands-and-combat.md`](./03-commands-and-combat.md)
 - Phase 3 — Simulation depth: [`04-simulation.md`](./04-simulation.md)
 - Phase 4 — Kinh tế: [`05-economy.md`](./05-economy.md)
+- Phase 5 — UI / UX: [`06-ui-ux.md`](./06-ui-ux.md)
 - Backlog / chưa làm: [`99-backlog.md`](./99-backlog.md)
 
 ## Nguyên tắc chia việc
@@ -125,6 +126,9 @@ flowchart TD
 | ECO-01 | 4 | L | DONE |
 | ECO-02 | 4 | S | DONE |
 | ECO-03 | 4 | S | DONE |
+| UIX-01 | 5 | M | DONE |
+| UIX-02 | 5 | S | DONE |
+| UIX-03 | 5 | M | DONE |
 
 Size: **S** < 2h, **M** ~ nửa ngày, **L** >= 1 ngày.
 

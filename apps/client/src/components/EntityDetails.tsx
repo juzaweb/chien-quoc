@@ -275,6 +275,11 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
                       <div className="text-slate-400 text-[9px] mt-0.5">
                         Tấn công: {uBp.attackPower} | Máu: {uBp.maxHp}
                       </div>
+                      {/* UIX-02: AoE2 tooltips advertise the training time, which is
+                          the only way to compare two units' cost-per-second. */}
+                      <div className="text-slate-400 text-[9px]">
+                        Huấn luyện: {(uBp.trainTimeMs / 1000).toFixed(0)}s
+                      </div>
                     </div>
                   </div>
                 </div>
