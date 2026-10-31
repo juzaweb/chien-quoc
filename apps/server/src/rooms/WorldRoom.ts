@@ -14,7 +14,6 @@ import {
   POPULATION_PER_HOUSE,
   PlaceBuildingPayload,
   Resources,
-  ResourceType,
   MoveUnitsPayload,
   TrainUnitPayload,
   AttackTargetPayload,
@@ -37,12 +36,8 @@ import { PlayerState } from '../schema/PlayerState.js';
 import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
-import {
-  approachPointOutsideFootprint,
-  getBuildApproachPoint,
-  isWithinBuildRange,
-  syncBuilders
-} from './construction.js';
+import { getBuildApproachPoint, isWithinBuildRange, syncBuilders } from './construction.js';
+import { EconomySystem } from './EconomySystem.js';
 import { distanceToFootprint } from './geometry.js';
 import { Pathfinder } from '../services/Pathfinder.js';
 
@@ -59,30 +54,6 @@ const PLAYER_COLORS = [
 
 /** Distance between formation cells, in tiles. Wide enough to keep rings apart. */
 const FORMATION_SPACING = 0.6;
-
-/**
- * Search radius, in tiles, for the next resource node of the same type once a
- * villager empties its current one (CMD-06). Ten tiles covers the gap between
- * neighbouring forest patches without letting a villager cross the whole map.
- */
-const HARVEST_RETARGET_RADIUS = 10;
-
-/**
- * SIM-02: units a villager takes off a node per second of harvesting. One
- * second's worth fills a starting villager's carry capacity (10), so the walk
- * to a drop-off and back — not the gathering — is what limits the economy.
- */
-const GATHER_AMOUNT_PER_SECOND = 10;
-
-/**
- * How close to a drop-off's footprint edge a villager has to be for the load to
- * be banked. Matches the build range on purpose: both mean "standing next to the
- * building", and the approach point is only 0.5 tiles outside the footprint.
- */
-const DROP_OFF_RANGE = 1.5;
-
-/** Distance outside the footprint a villager walks to in order to unload. */
-const DROP_OFF_APPROACH_DISTANCE = 0.5;
 
 /**
  * CMD-04b refund rule. AoE returns everything for a foundation that was only
@@ -160,13 +131,20 @@ export class WorldRoom extends Room<{ state: WorldState }> {
    * touched by `processUnitCombat`.
    */
   private towerTimers: Map<string, number> = new Map();
-  private harvestTimers: Map<string, number> = new Map();
   /**
-   * Last resource type a villager was ordered to gather, keyed by unit id.
-   * Transient on purpose: after a server restart the map is empty, so
-   * `processUnitHarvest` re-seeds it from the live node instead of dying.
+   * Economy rules (gathering, carrying, drop-off) and their transient maps.
+   *
+   * Built on first use rather than in a field initialiser: `this.state` only
+   * exists after `onCreate()` — or after `setState()` in tests — so constructing
+   * it early would capture `undefined`.
    */
-  private harvestTypeByUnit: Map<string, string> = new Map();
+  private economySystem: EconomySystem | null = null;
+  /** Built on first use; see {@link economySystem}. */
+  private get economy(): EconomySystem {
+    this.economySystem ??= new EconomySystem(this.state, this);
+    return this.economySystem;
+  }
+
   /** SIM-01: reused across searches; see `Pathfinder`. */
   private readonly pathfinder = new Pathfinder();
   private blockedGrid: Uint8Array | null = null;
@@ -970,7 +948,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
    * waypoints would sit in the snapshot and never run, because nothing else ever
    * consumes them.
    */
-  private resumeQueuedWaypoint(unit: UnitState) {
+  resumeQueuedWaypoint(unit: UnitState) {
     unit.targetEntityId = '';
     unit.targetEntityType = '';
     unit.previousActionState = '';
@@ -1330,7 +1308,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       unit.actionState = 'BUILDING';
       // Leaving a woodline for a build site must not leave a stale retarget type
       // behind, or a later depleted node would pull the villager back to it.
-      this.harvestTypeByUnit.delete(unit.id);
+      this.economy.clearHarvestOrder(unit.id);
     });
   }
 
@@ -1359,37 +1337,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   private handleHarvestResource(client: Client, payload: HarvestResourcePayload) {
-    if (!payload.unitIds || payload.unitIds.length === 0) return;
-    if (payload.unitIds.length > MAX_SELECTION) {
-      this.rejectCommand(client, 'Too many units in one command');
-      return;
-    }
-
-    const resource = this.state.resourceNodes.get(payload.resourceNodeId);
-    if (!resource) {
-      this.rejectCommand(client, 'Resource node no longer exists');
-      return;
-    }
-    if (resource.remainingAmount <= 0) {
-      this.rejectCommand(client, 'Resource node is depleted');
-      return;
-    }
-
-    payload.unitIds.forEach((uId) => {
-      const unit = this.state.units.get(uId);
-      if (unit && unit.ownerId === client.sessionId && UNIT_BLUEPRINTS[unit.type as UnitType]?.canHarvest) {
-        unit.queueTargetX.clear();
-        unit.queueTargetY.clear();
-        unit.targetEntityId = payload.resourceNodeId;
-        unit.targetEntityType = 'resource';
-        this.setWalkTarget(unit, resource.gridX, resource.gridY);
-        unit.actionState = 'HARVESTING';
-        unit.previousActionState = '';
-        // Remember the type so a depleted node can hand the villager to the
-        // nearest node of the same kind instead of leaving it idle (CMD-06).
-        this.harvestTypeByUnit.set(unit.id, resource.resourceType);
-      }
-    });
+    this.economy.handleHarvestOrder(client, payload);
   }
 
   /**
@@ -1431,7 +1379,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       unit.dropOffId = '';
       unit.queueTargetX.clear();
       unit.queueTargetY.clear();
-      this.harvestTypeByUnit.delete(unit.id);
+      this.economy.clearHarvestOrder(unit.id);
     });
   }
 
@@ -1475,7 +1423,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   /** Notify a client that a command was refused, so the UI can explain why. */
-  private rejectCommand(client: Client, message: string) {
+  rejectCommand(client: Client, message: string) {
     client.send(NetworkMessage.ERROR_NOTIFICATION, { message });
   }
 
@@ -1645,9 +1593,9 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         this.processUnitCombat(unit, deltaTime);
       }
 
-      // Harvesting handling
+      // Harvesting and carrying (CMD-06 / SIM-02)
       if (unit.actionState === 'HARVESTING' && unit.targetEntityId) {
-        this.processUnitHarvest(unit, deltaTime);
+        this.economy.updateUnit(unit, deltaTime);
       }
 
       // CMD-05: signing a villager up to the crew once it reaches the site, and
@@ -1658,7 +1606,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
       // SIM-02: banking the load once the walk back to the drop-off is done.
       if (unit.actionState === 'RETURNING') {
-        this.processUnitReturning(unit);
+        this.economy.updateUnit(unit, deltaTime);
       }
     });
   }
@@ -1725,7 +1673,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
               const victimOwner = targetUnit.ownerId;
               this.state.units.delete(targetUnit.id);
               // Transient harvest state must not outlive the unit.
-              this.harvestTypeByUnit.delete(targetUnit.id);
+              this.economy.forgetUnit(targetUnit.id);
               this.updatePlayerPopulation(victimOwner);
               this.endAttackOrder(unit);
             }
@@ -1796,7 +1744,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       const victimOwner = target.ownerId;
       this.state.units.delete(target.id);
       // Transient harvest state must not outlive the unit.
-      this.harvestTypeByUnit.delete(target.id);
+      this.economy.forgetUnit(target.id);
       this.updatePlayerPopulation(victimOwner);
     }
   }
@@ -1829,7 +1777,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
    * one is computed on an upcoming tick. Nothing is queued for a destination the
    * unit is already standing on.
    */
-  private setWalkTarget(unit: UnitState, targetX: number, targetY: number) {
+  setWalkTarget(unit: UnitState, targetX: number, targetY: number) {
     unit.targetX = targetX;
     unit.targetY = targetY;
     unit.pathX.clear();
@@ -1929,240 +1877,6 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.blockedGridBuiltAt = performance.now();
 
     return grid;
-  }
-
-  /**
-   * Finds the closest node of `resourceType` within `radius` tiles of the unit.
-   * Depleted nodes are skipped: a node can linger for a tick between its last
-   * harvest and the delete, and sending a villager there would strand it.
-   */
-  private findNearestResource(unit: UnitState, resourceType: string, radius: number): ResourceNodeState | null {
-    let nearest: ResourceNodeState | null = null;
-    let nearestDist = radius;
-
-    this.state.resourceNodes.forEach((node: ResourceNodeState) => {
-      if (node.resourceType !== resourceType || node.remainingAmount <= 0) return;
-      const dist = Math.hypot(node.gridX - unit.x, node.gridY - unit.y);
-      if (dist <= nearestDist) {
-        nearest = node;
-        nearestDist = dist;
-      }
-    });
-
-    return nearest;
-  }
-
-  /**
-   * Moves a villager onto the nearest node of the type it was already gathering
-   * (CMD-06). Without this the villager stood still as IDLE the moment its node
-   * ran dry, which in a forest meant it stopped for good a few tiles from the
-   * next tree.
-   *
-   * Only applies when the unit has no queued waypoints: those are explicit
-   * player orders and outrank an automatic retarget.
-   *
-   * @returns `true` when a new node was assigned.
-   */
-  private retargetHarvest(unit: UnitState): boolean {
-    if (unit.queueTargetX.length > 0) return false;
-
-    const resourceType = this.harvestTypeByUnit.get(unit.id);
-    if (!resourceType) return false;
-
-    const node = this.findNearestResource(unit, resourceType, HARVEST_RETARGET_RADIUS);
-    if (!node) return false;
-
-    unit.targetEntityId = node.id;
-    unit.targetEntityType = 'resource';
-    this.setWalkTarget(unit, node.gridX, node.gridY);
-    unit.actionState = 'HARVESTING';
-    return true;
-  }
-
-  private processUnitHarvest(unit: UnitState, deltaTime: number) {
-    const carryCapacity = UNIT_BLUEPRINTS[unit.type as UnitType]?.carryCapacity ?? 0;
-    if (carryCapacity <= 0) return;
-
-    // SIM-02: a villager holding a full load banks it instead of harvesting over
-    // it. This is also the exit for anyone restored mid-order after a restart.
-    if (unit.carryingAmount >= carryCapacity) {
-      this.startReturning(unit);
-      return;
-    }
-
-    const resource = this.state.resourceNodes.get(unit.targetEntityId);
-    if (!resource) {
-      // Another villager may have emptied this node while this one was walking
-      // to it. Bank whatever is already carried before looking for a new node.
-      if (unit.carryingAmount > 0) {
-        this.startReturning(unit);
-        return;
-      }
-      if (!this.retargetHarvest(unit)) {
-        this.harvestTypeByUnit.delete(unit.id);
-        this.resumeQueuedWaypoint(unit);
-      }
-      return;
-    }
-
-    // Re-seed after a restart, where the order was restored but the transient
-    // map was not, so the unit can still retarget instead of stopping.
-    if (!this.harvestTypeByUnit.has(unit.id)) {
-      this.harvestTypeByUnit.set(unit.id, resource.resourceType);
-    }
-
-    // The carry slot remembers one type only, so a villager ordered from a wood
-    // line to a gold mine banks the wood first instead of turning it into gold.
-    if (unit.carryingAmount > 0 && unit.carryingResourceType !== resource.resourceType) {
-      this.startReturning(unit);
-      return;
-    }
-
-    const dist = Math.hypot(resource.gridX - unit.x, resource.gridY - unit.y);
-    if (dist > 1.5) return;
-
-    const timerKey = `harv_${unit.id}`;
-    const harvestTimer = (this.harvestTimers.get(timerKey) || 0) + deltaTime;
-    if (harvestTimer < 1000) {
-      this.harvestTimers.set(timerKey, harvestTimer);
-      return;
-    }
-    this.harvestTimers.set(timerKey, 0);
-
-    const taken = Math.min(
-      GATHER_AMOUNT_PER_SECOND,
-      resource.remainingAmount,
-      carryCapacity - unit.carryingAmount
-    );
-
-    if (taken > 0) {
-      resource.remainingAmount -= taken;
-      unit.carryingAmount += taken;
-      unit.carryingResourceType = resource.resourceType;
-    }
-
-    if (resource.remainingAmount <= 0) {
-      this.state.resourceNodes.delete(resource.id);
-      // AoE behaviour: bank what is in hand, then walk to the next node of the
-      // same type instead of standing idle next to an empty stump.
-      if (unit.carryingAmount > 0) {
-        this.startReturning(unit);
-      } else if (!this.retargetHarvest(unit)) {
-        this.harvestTypeByUnit.delete(unit.id);
-        this.resumeQueuedWaypoint(unit);
-      }
-      return;
-    }
-
-    if (unit.carryingAmount >= carryCapacity) {
-      this.startReturning(unit);
-    }
-  }
-
-  /**
-   * SIM-02: sends a loaded villager to the closest building that accepts what it
-   * carries.
-   *
-   * `targetEntityId` keeps pointing at the resource node so the unit knows where
-   * to go back to; `dropOffId` is what the return trip targets. With nowhere to
-   * unload, the villager stops holding its load instead of the resources
-   * evaporating into nothing.
-   */
-  private startReturning(unit: UnitState) {
-    const dropOff = this.findNearestDropOff(unit, unit.carryingResourceType);
-
-    if (!dropOff) {
-      unit.dropOffId = '';
-      unit.actionState = 'IDLE';
-      unit.targetX = unit.x;
-      unit.targetY = unit.y;
-      unit.pathX.clear();
-      unit.pathY.clear();
-      return;
-    }
-
-    unit.dropOffId = dropOff.id;
-    unit.actionState = 'RETURNING';
-    const approach = approachPointOutsideFootprint(unit, dropOff, 0, 1, DROP_OFF_APPROACH_DISTANCE);
-    this.setWalkTarget(unit, approach.x, approach.y);
-  }
-
-  /** Closest finished building of the unit's owner that accepts `resourceType`. */
-  private findNearestDropOff(unit: UnitState, resourceType: string): BuildingState | null {
-    if (!resourceType) return null;
-
-    let nearest: BuildingState | null = null;
-    let nearestDist = Infinity;
-
-    this.state.buildings.forEach((building: BuildingState) => {
-      if (building.ownerId !== unit.ownerId || !building.isConstructed) return;
-
-      const blueprint = BUILDING_BLUEPRINTS[building.type as BuildingType];
-      if (!blueprint || !blueprint.dropOffs.includes(resourceType as ResourceType)) return;
-
-      const dist = distanceToFootprint(unit.x, unit.y, building);
-      if (dist < nearestDist) {
-        nearest = building;
-        nearestDist = dist;
-      }
-    });
-
-    return nearest;
-  }
-
-  /**
-   * SIM-02: banks the load once the villager reaches its drop-off, then sends it
-   * back to the node it came from.
-   *
-   * The drop-off is re-read from state every tick, so a building destroyed while
-   * the villager is walking there never pays out: the trip is re-planned against
-   * another drop-off, or the villager stops holding the load when none is left.
-   */
-  private processUnitReturning(unit: UnitState) {
-    const dropOff = this.state.buildings.get(unit.dropOffId);
-    const accepts =
-      !!dropOff &&
-      dropOff.isConstructed &&
-      dropOff.ownerId === unit.ownerId &&
-      (BUILDING_BLUEPRINTS[dropOff.type as BuildingType]?.dropOffs.includes(
-        unit.carryingResourceType as ResourceType
-      ) ?? false);
-
-    if (!accepts) {
-      this.startReturning(unit);
-      return;
-    }
-
-    if (distanceToFootprint(unit.x, unit.y, dropOff) > DROP_OFF_RANGE) return;
-
-    const player = this.state.players.get(unit.ownerId);
-    if (!player) return;
-
-    if (unit.carryingAmount > 0) {
-      this.creditResource(player, unit.carryingResourceType, unit.carryingAmount);
-      unit.carryingAmount = 0;
-      unit.carryingResourceType = '';
-    }
-    unit.dropOffId = '';
-
-    const node = this.state.resourceNodes.get(unit.targetEntityId);
-    if (node) {
-      unit.actionState = 'HARVESTING';
-      this.setWalkTarget(unit, node.gridX, node.gridY);
-    } else if (!this.retargetHarvest(unit)) {
-      this.harvestTypeByUnit.delete(unit.id);
-      this.resumeQueuedWaypoint(unit);
-    }
-  }
-
-  /** Adds `amount` of `resourceType` to a player's stockpile. */
-  private creditResource(player: PlayerState, resourceType: string, amount: number) {
-    if (amount <= 0) return;
-
-    if (resourceType === 'wood') player.wood += amount;
-    else if (resourceType === 'food') player.food += amount;
-    else if (resourceType === 'gold') player.gold += amount;
-    else if (resourceType === 'stone') player.stone += amount;
   }
 
   private updatePlayerPopulation(ownerId: string) {

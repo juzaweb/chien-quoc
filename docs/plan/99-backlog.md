@@ -54,9 +54,10 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 - **Giới hạn 200 population** (`MAX_POPULATION_LIMIT` đã có trong shared, chưa enforce).
 - **Unit collision** — lính hiện chồng lên nhau hoàn toàn.
 - **Fog of war** — chưa có khái niệm tầm nhìn.
-- **Timer rò rỉ cho unit đã chết** — `attackTimers`/`harvestTimers` không được xoá khi
-  unit bị xoá khỏi `state.units` (chết hoặc rời), nên key `atk_<id>`/`harv_<id>` nằm lại
-  vĩnh viễn. Dọn ở nhánh chết trong `processUnitCombat` hoặc ở `updatePlayerPopulation`.
+- **`attackTimers` rò rỉ cho unit đã chết** — key `atk_<id>` không được xoá khi unit bị xoá
+  khỏi `state.units`, nên nằm lại vĩnh viễn. Phía kinh tế đã hết: `harvestTimers` chuyển vào
+  `EconomySystem` và xoá qua `forgetUnit()` ở cả hai nhánh chết (combat + tower). Dọn nốt
+  `attackTimers` ở nhánh chết trong `processUnitCombat`/`processTowerCombat`.
 - **Hai hệ keybinding song song** — `WorldScene` bind qua Phaser keyboard (`S`,
   `Ctrl+1..9`) còn `App.tsx` bind `window` keydown (`Q/W/E/R/T`, `Esc`). Hệ `window`
   không chặn modifier nên `Ctrl+W` vừa đóng tab vừa kích hoạt Barracks. Gộp về một chỗ
@@ -75,11 +76,13 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
   vì các lệnh đó idempotent (`STOP_UNITS`/select lại cùng unit thì kết quả như cũ), nhưng
   nên rà một lượt: thêm một helper dùng chung (timestamp debounce hoặc
   `Phaser.Input.Keyboard.JustDown` trên `Key` object) thay vì mỗi `bind*` tự xử lý.
-- **`WorldRoom.ts` 2215 dòng** — `WorldScene.ts` đã tách xong (2388 → 740, xem
-  `game/input/*` + `game/render/*`), nhưng phía server thì ngược lại: mỗi CMD/SIM lại thêm
-  vào một file. Đề xuất tách `WorldRoom` thành movement / combat / economy / commands, bắt
-  đầu từ economy (harvest + drop-off, đã đủ lớn sau SIM-02) — `construction.ts` và
-  `geometry.ts` đã là tiền lệ tốt.
+- **`WorldRoom.ts` 1929 dòng (đang tách)** — `WorldScene.ts` xong (2388 → 740, xem
+  `game/input/*` + `game/render/*`). Server: economy đã tách sang `rooms/EconomySystem.ts`
+  (harvest, mang hàng, drop-off, retarget) nên `WorldRoom` 2215 → 1929 và không còn giữ
+  timer/map kinh tế nào. Còn lại nên tách tiếp, theo thứ tự đau nhất: **combat**
+  (`processUnitCombat`, `processTowerCombat`, aggro, `attackTimers`/`towerTimers`) rồi
+  **commands** (`handle*` + validate) và **movement** (`setWalkTarget`, `processPendingPaths`,
+  `getBlockedGrid`, `Pathfinder`).
 - **Pathfinding không tự tính lại khi có vật cản mới** — path chỉ tính lúc ra lệnh; đặt nhà
   lên đường đi của một unit đang trên đường thì nó đi xuyên qua nhà đó cho tới đích. Cần
   kiểm tra ô kế tiếp mỗi tick và xin path mới khi bị chặn (hoặc dùng hàng đợi path có sẵn).

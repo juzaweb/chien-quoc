@@ -93,6 +93,11 @@ Quyết định:
 - `approachPointOutsideFootprint` tách sang `rooms/geometry.ts` và dùng chung cho cả
   builder (CMD-05) lẫn dân đi trả hàng — cùng một bài toán "đứng sát mép footprint".
 - **Client**: `RETURNING` dùng animation đi bộ. Icon tài nguyên trên đầu dân để backlog.
+- **Code sống ở `rooms/EconomySystem.ts`** (tách khỏi `WorldRoom` ngay sau SIM-02): class
+  nhận `WorldState` + một port `{ setWalkTarget, resumeQueuedWaypoint, rejectCommand }`, giữ
+  hai map transient (`gatherTimers`, `harvestTypeByUnit`) và expose `forgetUnit` /
+  `clearHarvestOrder`. `WorldRoom` 2215 → 1929 dòng, handler `HARVEST_RESOURCE` chỉ còn một
+  dòng gọi sang.
 
 Đo (server thật, 1 account): dân cách TC 5 tile — túi đầy 10 gỗ, `wood` của player vẫn 300;
 `RETURNING` với `dropOffId = b_2861`; tới TC `wood 300 → 310`; quay lại `HARVESTING`
