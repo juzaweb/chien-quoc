@@ -1112,8 +1112,8 @@ describe('drop-off buildings (ECO)', () => {
    * and a town center pinned at the far end of the map, so "nearest drop-off"
    * is a real choice rather than the only option.
    */
-  function campScenario(options: { campType: string; nodeType: string }) {
-    const { campType, nodeType } = options;
+  function campScenario(options: { campType: string; nodeType: string; isConstructed?: boolean }) {
+    const { campType, nodeType, isConstructed = true } = options;
     const room = createRoom();
     const player = addPlayer(room, 'player-a', { wood: 0, food: 0, gold: 0, stone: 0 });
 
@@ -1128,6 +1128,7 @@ describe('drop-off buildings (ECO)', () => {
       id: 'b_camp',
       ownerId: 'player-a',
       type: campType,
+      isConstructed,
       gridX: 50,
       gridY: 44
     });
@@ -1186,6 +1187,21 @@ describe('drop-off buildings (ECO)', () => {
       bank(room, () => player[resource] > 0);
       expect(player[resource], resource).toBe(UNIT_BLUEPRINTS.VILLAGER.carryCapacity);
     }
+  });
+
+  it('an unfinished camp is not a drop-off', () => {
+    // A lumber camp still under construction must not collect loads: the
+    // villager walks past it to the town center instead.
+    const { room, unit } = campScenario({
+      campType: 'LUMBER_CAMP',
+      nodeType: 'wood',
+      isConstructed: false
+    });
+
+    internals(room).update(1000);
+
+    expect(unit.actionState).toBe('RETURNING');
+    expect(unit.dropOffId).toBe('b_tc');
   });
 
   it('a lumber camp refuses a load it does not handle', () => {

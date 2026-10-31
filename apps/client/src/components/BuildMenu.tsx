@@ -1,6 +1,7 @@
 import React from 'react';
 import { BUILDING_BLUEPRINTS, BuildingType, Resources } from '@chien-quoc/shared';
 import { Landmark, ShieldAlert, Home, Wheat, TowerControl, TreePine, Warehouse, Pickaxe } from 'lucide-react';
+import { BUILDING_HOTKEY_BY_TYPE } from '../game/input/buildingHotkeys';
 
 interface BuildMenuProps {
   playerResources: Resources;
@@ -9,15 +10,15 @@ interface BuildMenuProps {
   onCancelBuilding: () => void;
 }
 
-const BUILDINGS: { type: BuildingType; icon: React.ReactNode; hotkey: string }[] = [
-  { type: 'TOWN_CENTER', icon: <Landmark size={20} />, hotkey: 'Q' },
-  { type: 'BARRACKS', icon: <ShieldAlert size={20} />, hotkey: 'W' },
-  { type: 'HOUSE', icon: <Home size={20} />, hotkey: 'E' },
-  { type: 'FARM', icon: <Wheat size={20} />, hotkey: 'R' },
-  { type: 'TOWER', icon: <TowerControl size={20} />, hotkey: 'T' },
-  { type: 'LUMBER_CAMP', icon: <TreePine size={20} />, hotkey: 'Y' },
-  { type: 'MILL', icon: <Warehouse size={20} />, hotkey: 'U' },
-  { type: 'MINING_CAMP', icon: <Pickaxe size={20} />, hotkey: 'I' }
+const BUILDINGS: { type: BuildingType; icon: React.ReactNode }[] = [
+  { type: 'TOWN_CENTER', icon: <Landmark size={20} /> },
+  { type: 'BARRACKS', icon: <ShieldAlert size={20} /> },
+  { type: 'HOUSE', icon: <Home size={20} /> },
+  { type: 'FARM', icon: <Wheat size={20} /> },
+  { type: 'TOWER', icon: <TowerControl size={20} /> },
+  { type: 'LUMBER_CAMP', icon: <TreePine size={20} /> },
+  { type: 'MILL', icon: <Warehouse size={20} /> },
+  { type: 'MINING_CAMP', icon: <Pickaxe size={20} /> }
 ];
 
 const BUILDING_THUMBNAILS: Record<BuildingType, string> = {
@@ -54,7 +55,8 @@ export const BuildMenu: React.FC<BuildMenuProps> = ({
       </div>
 
       <div className="grid grid-cols-4 gap-2">
-        {BUILDINGS.map(({ type, icon, hotkey }) => {
+        {BUILDINGS.map(({ type, icon }) => {
+          const hotkey = BUILDING_HOTKEY_BY_TYPE[type];
           const bp = BUILDING_BLUEPRINTS[type];
           const canAfford =
             playerResources.wood >= bp.cost.wood &&

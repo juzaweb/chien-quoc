@@ -1,6 +1,8 @@
 import * as Phaser from 'phaser';
 import { TILE_HEIGHT, TILE_WIDTH, UNIT_BLUEPRINTS, getIsoDepth, gridToScreen } from '@chien-quoc/shared';
+import type { BuildingType } from '@chien-quoc/shared';
 import type { WorldScene } from '../scenes/WorldScene.js';
+import { buildingArt, buildingHpBarY } from './buildingArt.js';
 
 /**
  * Builds and maintains the visual object for every server entity: the container,
@@ -103,46 +105,9 @@ export class EntityRenderer {
       building.gridY + building.sizeY / 2 - 0.5
     );
 
-    let textureKey = 'b_town_center';
-    let offsetY = -130;
-    const scale = 1.0;
-
-    const customKey = `building_${building.type}`;
-    if (scene.textures.exists(customKey)) {
-      textureKey = customKey;
-      if (building.type === 'TOWN_CENTER') {
-        offsetY = -130;
-      } else if (building.type === 'BARRACKS') {
-        offsetY = -96;
-      } else if (building.type === 'HOUSE') {
-        offsetY = -70;
-      } else if (building.type === 'FARM') {
-        offsetY = 0;
-      } else if (building.type === 'TOWER') {
-        offsetY = -160;
-      } else if (
-        building.type === 'LUMBER_CAMP' ||
-        building.type === 'MILL' ||
-        building.type === 'MINING_CAMP'
-      ) {
-        // Same 256x220 sheet as the house, bottom-anchored the same way.
-        offsetY = -70;
-      }
-    } else {
-      if (building.type === 'BARRACKS') {
-        textureKey = 'b_barracks';
-        offsetY = -70;
-      } else if (building.type === 'HOUSE') {
-        textureKey = 'b_house';
-        offsetY = -50;
-      } else if (building.type === 'FARM') {
-        textureKey = 'b_farm';
-        offsetY = 0;
-      } else if (building.type === 'TOWER') {
-        textureKey = 'b_tower';
-        offsetY = -90;
-      }
-    }
+    const { textureKey, offsetY, scale } = buildingArt(building.type as BuildingType, (key) =>
+      scene.textures.exists(key)
+    );
 
     const container = scene.add.container(screenPos.x, screenPos.y);
 
@@ -216,18 +181,7 @@ export class EntityRenderer {
     const width = Math.max(70, building.sizeX * 36);
     const height = 6;
 
-    let barY = -120;
-    if (building.type === 'TOWN_CENTER') barY = -370;
-    else if (building.type === 'TOWER') barY = -350;
-    else if (building.type === 'BARRACKS') barY = -270;
-    else if (building.type === 'HOUSE') barY = -190;
-    else if (building.type === 'FARM') barY = -100;
-    else if (
-      building.type === 'LUMBER_CAMP' ||
-      building.type === 'MILL' ||
-      building.type === 'MINING_CAMP'
-    )
-      barY = -190;
+    const barY = buildingHpBarY(building.type);
 
     // Background
     hpBar.fillStyle(0x0f172a, 0.85);

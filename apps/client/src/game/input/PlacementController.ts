@@ -8,14 +8,8 @@ import {
 } from '@chien-quoc/shared';
 import type * as Phaser from 'phaser';
 import type { WorldScene } from '../scenes/WorldScene.js';
+import { buildingArt, type BuildingArt } from '../render/buildingArt.js';
 import { pointerWorldGrid } from './pointer.js';
-
-/** Where a building type's artwork sits relative to its container origin. */
-interface GhostArt {
-  textureKey: string;
-  offsetY: number;
-  scale: number;
-}
 
 /**
  * CMD-04: building placement mode. Owns the ghost preview, the placement
@@ -142,43 +136,7 @@ export class PlacementController {
     scene.commands.showFeedback(ghostPos.x, ghostPos.y, 0xef4444);
   }
 
-  private ghostArt(type: BuildingType): GhostArt {
-    let textureKey = 'b_town_center';
-    let offsetY = -130;
-    const scale = 1.0;
-
-    const customKey = `building_${type}`;
-    if (this.scene.textures.exists(customKey)) {
-      textureKey = customKey;
-      if (type === 'TOWN_CENTER') {
-        offsetY = -130;
-      } else if (type === 'BARRACKS') {
-        offsetY = -96;
-      } else if (type === 'HOUSE') {
-        offsetY = -70;
-      } else if (type === 'FARM') {
-        offsetY = 0;
-      } else if (type === 'TOWER') {
-        offsetY = -160;
-      } else if (type === 'LUMBER_CAMP' || type === 'MILL' || type === 'MINING_CAMP') {
-        offsetY = -70;
-      }
-    } else {
-      if (type === 'BARRACKS') {
-        textureKey = 'b_barracks';
-        offsetY = -70;
-      } else if (type === 'HOUSE') {
-        textureKey = 'b_house';
-        offsetY = -50;
-      } else if (type === 'FARM') {
-        textureKey = 'b_farm';
-        offsetY = 0;
-      } else if (type === 'TOWER') {
-        textureKey = 'b_tower';
-        offsetY = -90;
-      }
-    }
-
-    return { textureKey, offsetY, scale };
+  private ghostArt(type: BuildingType): BuildingArt {
+    return buildingArt(type, (key) => this.scene.textures.exists(key));
   }
 }

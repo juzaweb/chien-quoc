@@ -10,6 +10,7 @@ import {
 import * as Phaser from 'phaser';
 import type { ControlGroupSummary, WorldScene } from '../scenes/WorldScene.js';
 import { findBuildingAt, findOwnFoundationAt, findOwnGatherableAt, findResourceAt, findUnitAt } from './hitTest.js';
+import { BUILDING_HOTKEYS } from './buildingHotkeys.js';
 import { guardKey } from './keyGuard.js';
 import { pointerWorldGrid, pointerWorldPoint } from './pointer.js';
 
@@ -21,22 +22,6 @@ const CONTROL_GROUP_KEYS = ['ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN
 
 /** Second press within this window re-centres the camera on the group. */
 const CONTROL_GROUP_RECALL_DOUBLE_MS = 300;
-
-/**
- * `Q/W/E/R/T` start a placement, mirroring the HUD's build buttons in the same
- * order. The keyboard layer owns them so every hotkey lives in one place; the
- * scene forwards the choice to React, which owns the "currently placing" state.
- */
-const BUILDING_HOTKEYS: Array<{ key: string; type: BuildingType }> = [
-  { key: 'Q', type: 'TOWN_CENTER' },
-  { key: 'W', type: 'BARRACKS' },
-  { key: 'E', type: 'HOUSE' },
-  { key: 'R', type: 'FARM' },
-  { key: 'T', type: 'TOWER' },
-  { key: 'Y', type: 'LUMBER_CAMP' },
-  { key: 'U', type: 'MILL' },
-  { key: 'I', type: 'MINING_CAMP' }
-];
 
 /**
  * CMD-04b: minimum gap between two handled `Delete` presses, in milliseconds.
