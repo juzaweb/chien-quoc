@@ -17,5 +17,12 @@ export class BuildingState extends Schema {
   /** Rally point in grid coordinates; -1 on both axes means "not set". */
   @type('number') rallyX: number = -1;
   @type('number') rallyY: number = -1;
+  /**
+   * CMD-05: villagers currently putting work into this foundation. Rebuilt from
+   * the units' own state every tick (`syncBuilders` in `rooms/construction.ts`
+   * drops whoever walked away or was given a new order), so this is a view, not
+   * the source of truth.
+   */
+  @type(['string']) builderUnitIds = new ArraySchema<string>();
 }
 

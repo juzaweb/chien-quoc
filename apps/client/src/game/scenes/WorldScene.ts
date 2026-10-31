@@ -75,7 +75,7 @@ const ORDER_KEY_DEBOUNCE_MS = 250;
  * to a built-in CSS cursor - the browser renders them at any DPI without us
  * shipping images.
  */
-type CursorMode = 'default' | 'attack' | 'harvest' | 'build-ok' | 'build-blocked' | 'order';
+type CursorMode = 'default' | 'attack' | 'harvest' | 'construction' | 'build-ok' | 'build-blocked' | 'order';
 
 const CURSOR_CSS: Record<CursorMode, string> = {
   default: 'default',
@@ -85,6 +85,9 @@ const CURSOR_CSS: Record<CursorMode, string> = {
   // `copy` is the only built-in that reads as "carry this back", which is the
   // harvest affordance without custom art.
   harvest: 'copy',
+  // CMD-05: right-clicking your own foundation with villagers armed reads the
+  // same as harvest — "send them to work on that".
+  construction: 'copy',
   'build-ok': 'copy',
   'build-blocked': 'not-allowed',
   // An armed attack-move / patrol is asking for a destination: same affordance.
@@ -816,6 +819,9 @@ export class WorldScene extends Phaser.Scene {
           desired = walkAnim;
           break;
         case 'HARVESTING':
+        // CMD-05: a builder reuses the harvest loop; there is no separate
+        // villager_build sheet.
+        case 'BUILDING':
           desired = harvestAnim ?? idleAnim;
           break;
         case 'ATTACKING':
@@ -1092,6 +1098,18 @@ export class WorldScene extends Phaser.Scene {
     return foundId;
   }
 
+  /**
+   * CMD-05: id of one of the player's own unfinished buildings whose footprint
+   * contains `grid`, or null. Builds on `findBuildingAt` so the pointer, the
+   * cursor and the right-click order all agree on which building a click lands on.
+   */
+  private findOwnFoundationAt(grid: { gridX: number; gridY: number }): string | null {
+    const buildingId = this.findBuildingAt(grid, this.mySessionId);
+    if (!buildingId) return null;
+    const building = this.room?.state.buildings.get(buildingId);
+    return building && !building.isConstructed ? buildingId : null;
+  }
+
   /** Resource node under the pointer: sprite distance first, then exact grid cell. */
   private findResourceAt(worldPoint: { x: number; y: number }, grid: { gridX: number; gridY: number }): string | null {
     if (!this.room) return null;
@@ -1114,10 +1132,11 @@ export class WorldScene extends Phaser.Scene {
 
   /**
    * CMD-03: what a right click at `worldPoint` would do right now. Mirrors the
-   * unit-order branches of `handleRightClickCommand` (placement, attack, harvest,
-   * move) using the same hit-tests, so the cursor can never promise an order that
-   * the click will not issue. The rally-point branch is not represented: it only
-   * applies with a building selected and no units, which resolves to `default`.
+   * unit-order branches of `handleRightClickCommand` (placement, attack on an
+   * enemy, build on own foundation, harvest, move) using the same hit-tests, so
+   * the cursor can never promise an order that the click will not issue. The
+   * rally-point branch is not represented: it only applies with a building
+   * selected and no units, which resolves to `default`.
    */
   private resolveCursorMode(worldPoint: { x: number; y: number }): CursorMode {
     const grid = screenToGrid(worldPoint.x, worldPoint.y);
@@ -1134,6 +1153,9 @@ export class WorldScene extends Phaser.Scene {
     if (!this.room || this.selectedUnitIds.size === 0) return 'default';
 
     if (this.findUnitAt(worldPoint, 'enemy') || this.findBuildingAt(grid, 'enemy')) return 'attack';
+
+    // CMD-05: an own, unfinished building under the pointer is a build site.
+    if (this.selectionIsAllVillagers() && this.findOwnFoundationAt(grid)) return 'construction';
 
     if (this.selectionIsAllVillagers() && this.findResourceAt(worldPoint, grid)) return 'harvest';
 
@@ -1801,7 +1823,19 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    // 3. Check if right-clicked on a resource node (harvest command)
+    // 3. CMD-05: right-clicking your own foundation with villagers selected puts
+    // them to work on it instead of walking them onto the footprint.
+    const ownFoundationId = this.findOwnFoundationAt(targetGrid);
+    if (ownFoundationId && this.selectionIsAllVillagers()) {
+      this.room.send(NetworkMessage.BUILD_TARGET, {
+        unitIds: Array.from(this.selectedUnitIds),
+        buildingId: ownFoundationId
+      });
+      this.showCommandFeedback(worldPoint.x, worldPoint.y, 0xf97316);
+      return;
+    }
+
+    // 4. Check if right-clicked on a resource node (harvest command)
     const targetResourceNodeId = this.findResourceAt(worldPoint, targetGrid);
     if (targetResourceNodeId) {
       this.room.send(NetworkMessage.HARVEST_RESOURCE, {
@@ -1812,7 +1846,7 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    // 4. Default: Move command to target ground
+    // 5. Default: Move command to target ground
     this.room.send(NetworkMessage.MOVE_UNITS, {
       unitIds: Array.from(this.selectedUnitIds),
       targetGridX: targetGrid.gridX,

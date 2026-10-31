@@ -107,7 +107,7 @@ flowchart TD
 | CMD-02 | 2 | M | DONE |
 | CMD-03 | 2 | M | DONE |
 | CMD-04 | 2 | M | DONE |
-| CMD-05 | 2 | L | TODO |
+| CMD-05 | 2 | L | DONE |
 | CMD-06 | 2 | S | DONE |
 | SIM-01 | 3 | L | TODO |
 | SIM-02 | 3 | L | TODO |

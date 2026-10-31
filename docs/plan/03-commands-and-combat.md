@@ -409,6 +409,79 @@ với `spacing ≈ 0.6` tile (đủ để ring không chồng).
 
 **File:** shared types, `BuildingState.ts`, `UnitState.ts`, `WorldRoom.ts`, `WorldScene.ts`
 
+> **DONE.**
+> - Schema: `BuildingState.builderUnitIds` (danh sách dân đang xây). **Không phải nguồn sự thật**:
+>   mỗi tick `sumBuildPower()` dựng lại từ state của chính unit, loại ai đã bị lệnh khác kéo đi,
+>   đã chết, đã ra khỏi tầm — nhờ vậy không có đường nào để roster cũ "hồi sinh" một dân đã đi.
+> - shared: `UnitActionState` thêm `'BUILDING'`; `UnitBlueprint.buildPower` (dân `1`, lính `0` —
+>   dùng `buildPower` chứ không tái dùng `canHarvest`, để "hái được" và "xây được" là hai khái
+>   niệm riêng); `BuildTargetPayload { unitIds, buildingId }`; `NetworkMessage.BUILD_TARGET`.
+> - `PLACE_BUILDING`: móng bắt đầu `hp = 1` (trước là 20% maxHp). Móng gần như không phòng thủ,
+>   đúng AoE; dựng xong mới nhảy lên `maxHp`.
+> - `update()` nhánh construction: `progress += deltaTime * 100 * ΣbuildPower / buildTimeMs`.
+>   Không có dân → `buildPower = 0` → progress đứng yên (trước đây tự xong sau 5 s bất kể gì).
+>   Xong 100%: `isConstructed = true`, `hp = maxHp`, `clear()` roster.
+> - `handleBuildTarget`: `requireOwnedBuilding` (dùng lại của CMD-04) → chặn nhà đã xong →
+>   `collectOwnedUnits` (dùng lại CMD-02) → lọc `buildPower > 0`. Client chỉ gửi "dân nào, nhà nào";
+>   quyền sở hữu và danh sách dân hợp lệ đều resolve ở server.
+> - `getBuildApproachPoint`: chiếu unit lên vành ngoài footprint theo tia từ tâm nhà, nên mỗi dân
+>   nhận một điểm riêng quanh móng thay vì cả tổ dồn một ô; unit đứng đúng tâm (móng có thể bị
+>   đặt trùm lên dân) thì rải theo góc.
+> - `distanceToFootprint` (khoảng cách tới **hình chữ nhật**, `0` khi ở trong) + `processUnitBuilding`:
+>   vào tầm `BUILD_RANGE` thì ghi danh; móng bị huỷ/xong/đổi chủ thì `resumeQueuedWaypoint` →
+>   `IDLE` (hoặc waypoint Shift còn lại).
+> - Client: chuột phải **móng của mình** + selection toàn villager → `BUILD_TARGET`, ưu tiên ngay
+>   sau nhánh đánh công trình địch; `findOwnFoundationAt()` tái dùng `findBuildingAt(..., mySessionId)`
+>   nên con trỏ và lệnh không thể lệch nhau. `CursorMode 'construction'` → CSS `copy`.
+>   Anim `BUILDING` dùng lại `villager_harvest` (không có sheet `villager_build`).
+> - **Pitfall (bắt được khi test):** `BUILD_APPROACH_DISTANCE` để `1.0` thì điểm tiếp cận ở **góc
+>   chéo** cách footprint `hypot(1,1) = 1.414`, cộng sai số dừng 0.15 → `1.56 > BUILD_RANGE 1.5`.
+>   Dân đứng ở góc bị đá ra khỏi roster rồi không vào lại được. Đo được: 3 dân chỉ ra `22%/s`
+>   thay vì `30%/s`. Hạ còn `0.5` → worst case `0.86`, đo lại đúng `30.13%/s`.
+> - **Không cần reset `dev.db`:** `builderUnitIds` không nằm trong bảng SQLite nào (`DatabaseService`
+>   chỉ map các cột cũ), nên móng đang dở sau restart vẫn được khôi phục và chờ dân. Khác với
+>   ghi chú "breaking" ban đầu trong task.
+> - **Chưa phủ:** chưa có nút "huỷ dân khỏi công trình" riêng (dùng `STOP`/lệnh mới); chưa test
+>   hai account cùng xây một móng (không thể — móng phải cùng chủ).
+>
+> **Verify (socket probe thật, port 2571, 2 account):**
+> - Đặt Barracks → `hp=1/1200`, `progress=0`, `crew=[]`; đứng yên 3 s → vẫn `0.00` (không còn tự xây).
+> - 1 dân: `BUILDING`, roster `[u]`, đo `10.18 %/s` (đúng `100/10000ms`). Thêm 2 dân → roster 3,
+>   đo `30.13 %/s`. `STOP` một dân → roster còn 2 **ngay tick sau**, progress vẫn chạy (~22%/s)
+>   tới khi nhà xong thì roster về 0 và cả 3 `IDLE`, `hp=1200/1200`.
+> - Xây bằng 3 dân từ đặt móng tới hoàn thành: **4.6 s** (3.33 s lý thuyết + ~1.3 s đi bộ).
+> - Dân có `buildPower = 0` (SPEARMAN) → `Only villagers can build`, dân lính vẫn `IDLE`, móng
+>   `p=0`. Payload trộn `[spearman, villager x3]` → **không** lỗi, chỉ 3 dân vào `BUILDING`.
+> - Móng của account khác → `Not your building`, móng B vẫn `p=0`, dân A vẫn `IDLE`.
+> - Nhà đã xong → `Building is already finished`, không đổi gì.
+> - Huỷ móng khi dân đang đi tới (`CANCEL_BUILDING`) → dân về `IDLE`, `targetEntityId=''`.
+> - Dân đang xây bị `MOVE_UNITS` → rời roster ngay, progress dừng lại (1.24 → 2.40 rồi đứng).
+>
+> **Verify (browser thật, 1264×569, account mới + observer socket):**
+> - Đặt House: wood `300 → 250`, móng `hp=1/450`, `p=0`, `crew=[]`.
+> - Quét chọn 3 dân, rê lên móng → cursor `copy` (`construction`).
+> - Chuột phải móng → 3 dân `BUILDING` (`ent=b_2614`), roster tăng dần `[u1] → [u1,u3] → [u1,u3,u2]`
+>   khi từng dân vào tầm; progress `0 → 7.4 → 20.1 → 32.5 → 42.3 → 54.8 → 72.4 → 91.4 → 100`
+>   (2 dân ≈ `+12%/300ms`, 3 dân ≈ `+19%/300ms`), xong `hp=450/450`, cả 3 về `IDLE`.
+> - `tsc --noEmit` sạch `packages/shared`, `apps/server`, `apps/client`.
+>
+> **Review pass (5 trục, sau khi hoàn thành):**
+> - Tách domain construction ra `apps/server/src/rooms/construction.ts` (`distanceToFootprint`,
+>   `isWithinBuildRange`, `getBuildApproachPoint`, `syncBuilders`) — `WorldRoom.ts` từ 1904 → 1817
+>   dòng, logic xây không còn nằm lẫn trong room. `syncBuilders` thay tên `sumBuildPower` vì hàm
+>   **có** prune roster chứ không chỉ cộng; prune được ghi rõ trong docstring như một phần contract.
+> - Docstring `resolveCursorMode` (client) đã cũ (thiếu nhánh build-site) → cập nhật.
+> - Probe lại toàn bộ trên code sau tách: 21/21 PASS — `hp=1/1200`, đứng yên 2 s vẫn `p=0`,
+>   1 dân `10.00%/s` (đúng `100/10000ms` của Barracks), 3 dân `31.9%/s` và roster giữ nguyên 3
+>   (không còn flicker), `MOVE_UNITS` một dân → crew 2 sau 200 ms, gán lại → crew 3 sau 100 ms,
+>   xong thì `hp=1200/1200`, roster 0, cả 3 `IDLE`; `STOP` → crew 0, progress đứng; account khác
+>   → `Not your building`, crew không đổi.
+> - **Còn mở (cần chủ dự án quyết):** `WorldScene.ts` đang 2388 dòng — nên tách nhóm input/lệnh
+>   chuột phải ra module riêng trước khi thêm CMD tiếp theo; `builderUnitIds` được sync về client
+>   nhưng chưa HUD nào đọc (có thể chuyển thành roster server-private hoặc hiển thị số dân xây).
+>   Client chỉ gửi `BUILD_TARGET` khi selection **toàn** villager (đúng spec), server thì chấp nhận
+>   selection trộn và tự lọc — chưa mở ở client.
+
 ---
 
 ## CMD-06 — Auto-retarget cho dân khai thác

@@ -18,6 +18,7 @@ import {
   TrainUnitPayload,
   AttackTargetPayload,
   AttackMovePayload,
+  BuildTargetPayload,
   HarvestResourcePayload,
   StopUnitsPayload,
   SetRallyPointPayload,
@@ -35,6 +36,7 @@ import { PlayerState } from '../schema/PlayerState.js';
 import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
+import { getBuildApproachPoint, isWithinBuildRange, syncBuilders } from './construction.js';
 
 const PLAYER_COLORS = [
   '#3b82f6', // Blue
@@ -149,6 +151,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     this.onMessage(NetworkMessage.PATROL, (client, message: AttackMovePayload) => {
       this.handleAttackMove(client, message, 'PATROL');
+    });
+
+    this.onMessage(NetworkMessage.BUILD_TARGET, (client, message: BuildTargetPayload) => {
+      this.handleBuildTarget(client, message);
     });
 
     this.onMessage(NetworkMessage.HARVEST_RESOURCE, (client, message: HarvestResourcePayload) => {
@@ -769,7 +775,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     building.gridY = payload.gridY;
     building.sizeX = blueprint.sizeX;
     building.sizeY = blueprint.sizeY;
-    building.hp = Math.floor(blueprint.maxHp * 0.2); // Starts at 20% hp while building
+    building.hp = 1; // CMD-05: a foundation is nearly defenceless until it is finished
     building.maxHp = blueprint.maxHp;
     building.isConstructed = false;
     building.constructionProgress = 0;
@@ -1213,6 +1219,85 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     });
   }
 
+  /**
+   * CMD-05: sends villagers to work on one of the player's own foundations.
+   *
+   * The client only says "these units, that building"; the server resolves both
+   * against authoritative state, so a foreign foundation is rejected instead of
+   * being built for its owner, and non-builders are dropped from the crew rather
+   * than being dragged to the site.
+   *
+   * Each builder is sent to its own point on the ring just outside the footprint
+   * (see `getBuildApproachPoint`), which is what stops a three-villager crew from
+   * stacking on one tile.
+   */
+  private handleBuildTarget(client: Client, payload: BuildTargetPayload) {
+    if (!payload?.unitIds || payload.unitIds.length === 0) return;
+    if (payload.unitIds.length > MAX_SELECTION) {
+      this.rejectCommand(client, 'Too many units in one command');
+      return;
+    }
+
+    const building = this.requireOwnedBuilding(client, payload.buildingId);
+    if (!building) return;
+    if (building.isConstructed) {
+      this.rejectCommand(client, 'Building is already finished');
+      return;
+    }
+    if (!BUILDING_BLUEPRINTS[building.type as BuildingType]) {
+      this.rejectCommand(client, 'Unknown building type');
+      return;
+    }
+
+    const builders = this.collectOwnedUnits(client, payload.unitIds).filter(
+      (unit) => (UNIT_BLUEPRINTS[unit.type as UnitType]?.buildPower ?? 0) > 0
+    );
+    if (builders.length === 0) {
+      this.rejectCommand(client, 'Only villagers can build');
+      return;
+    }
+
+    builders.forEach((unit, idx) => {
+      const approach = getBuildApproachPoint(unit, building, idx, builders.length);
+
+      unit.queueTargetX.clear();
+      unit.queueTargetY.clear();
+      unit.targetEntityId = building.id;
+      unit.targetEntityType = 'building';
+      unit.previousActionState = '';
+      unit.targetX = approach.x;
+      unit.targetY = approach.y;
+      unit.actionState = 'BUILDING';
+      // Leaving a woodline for a build site must not leave a stale retarget type
+      // behind, or a later depleted node would pull the villager back to it.
+      this.harvestTypeByUnit.delete(unit.id);
+    });
+  }
+
+  /**
+   * Keeps a villager's `BUILDING` order in sync with the site each tick.
+   *
+   * Walking to the ring is handled by the movement pass; this only checks for a
+   * site that is gone or finished and, once the villager is close enough, signs it
+   * up to the crew.
+   */
+  private processUnitBuilding(unit: UnitState) {
+    const building = this.state.buildings.get(unit.targetEntityId);
+
+    // Cancelled, destroyed or finished: there is nothing left to build, so fall
+    // back to a queued waypoint (the site may have been a detour) or go idle.
+    if (!building || building.isConstructed || building.ownerId !== unit.ownerId) {
+      this.resumeQueuedWaypoint(unit);
+      return;
+    }
+
+    if (!isWithinBuildRange(unit, building)) return;
+
+    if (!building.builderUnitIds.includes(unit.id)) {
+      building.builderUnitIds.push(unit.id);
+    }
+  }
+
   private handleHarvestResource(client: Client, payload: HarvestResourcePayload) {
     if (!payload.unitIds || payload.unitIds.length === 0) return;
     if (payload.unitIds.length > MAX_SELECTION) {
@@ -1336,11 +1421,21 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     // 1. Update construction and training queues for buildings
     this.state.buildings.forEach((building: BuildingState) => {
       if (!building.isConstructed) {
-        building.constructionProgress += (dtSeconds * 100) / 5; // 5s build rate demo
+        // CMD-05: work only happens while villagers stand at the site, and the
+        // blueprint's buildTimeMs is the time one villager needs.
+        const buildPower = syncBuilders(building, this.state.units);
+        const buildTimeMs = BUILDING_BLUEPRINTS[building.type as BuildingType]?.buildTimeMs ?? 0;
+        if (buildPower > 0 && buildTimeMs > 0) {
+          building.constructionProgress += (deltaTime * 100 * buildPower) / buildTimeMs;
+        }
+
         if (building.constructionProgress >= 100) {
           building.constructionProgress = 100;
           building.isConstructed = true;
           building.hp = building.maxHp;
+          // The crew is done; every builder drops back to idle on its next tick
+          // (see `processUnitBuilding`), and the roster must not outlive the site.
+          building.builderUnitIds.clear();
           this.updatePlayerPopulation(building.ownerId);
         }
       }
@@ -1391,7 +1486,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         unit.actionState === 'HARVESTING' ||
         unit.actionState === 'ATTACKING' ||
         unit.actionState === 'ATTACK_MOVE' ||
-        unit.actionState === 'PATROL'
+        unit.actionState === 'PATROL' ||
+        unit.actionState === 'BUILDING'
       ) {
         let destinationX = unit.targetX;
         let destinationY = unit.targetY;
@@ -1461,6 +1557,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       // Harvesting handling
       if (unit.actionState === 'HARVESTING' && unit.targetEntityId) {
         this.processUnitHarvest(unit, deltaTime);
+      }
+
+      // CMD-05: signing a villager up to the crew once it reaches the site, and
+      // dropping the order when the foundation is finished or gone.
+      if (unit.actionState === 'BUILDING') {
+        this.processUnitBuilding(unit);
       }
     });
   }

@@ -21,7 +21,9 @@ export type UnitActionState =
   /** CMD-01: walk to a point, engaging every enemy met on the way. */
   | 'ATTACK_MOVE'
   /** CMD-01: walk back and forth between two points, engaging on the way. */
-  | 'PATROL';
+  | 'PATROL'
+  /** CMD-05: standing next to a foundation and putting work into it. */
+  | 'BUILDING';
 
 export interface BuildingBlueprint {
   type: BuildingType;
@@ -53,6 +55,12 @@ export interface UnitBlueprint {
    * working instead of charging at the first soldier that walks past).
    */
   aggroRadius: number;
+  /**
+   * CMD-05: how much work this unit contributes to a foundation, in villagers.
+   * `0` cannot build at all. A building's `buildTimeMs` is the time one unit of
+   * build power needs, so two villagers on one foundation halve it.
+   */
+  buildPower: number;
   description: string;
 }
 
@@ -102,6 +110,16 @@ export interface AttackMovePayload {
 }
 
 /**
+ * CMD-05: sends villagers to work on one of the player's own foundations. The
+ * server resolves the building and the valid builders from authoritative state,
+ * so a foreign id is rejected instead of being built for somebody else.
+ */
+export interface BuildTargetPayload {
+  unitIds: string[];
+  buildingId: string;
+}
+
+/**
  * Cancels whatever a unit is doing and leaves it standing where it is.
  * Unlike MOVE_UNITS this never makes the unit walk anywhere, so it is the only
  * way to halt mid-map (e.g. a villager halfway through a forest).
@@ -148,6 +166,7 @@ export enum NetworkMessage {
   ATTACK_TARGET = 'ATTACK_TARGET',
   ATTACK_MOVE = 'ATTACK_MOVE',
   PATROL = 'PATROL',
+  BUILD_TARGET = 'BUILD_TARGET',
   HARVEST_RESOURCE = 'HARVEST_RESOURCE',
   STOP_UNITS = 'STOP_UNITS',
   SET_RALLY_POINT = 'SET_RALLY_POINT',
