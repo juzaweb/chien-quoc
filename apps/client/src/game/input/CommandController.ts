@@ -9,6 +9,7 @@ import {
 import * as Phaser from 'phaser';
 import type { WorldScene } from '../scenes/WorldScene.js';
 import { findBuildingAt, findOwnFoundationAt, findResourceAt, findUnitAt } from './hitTest.js';
+import { guardKey } from './keyGuard.js';
 import { pointerWorldGrid, pointerWorldPoint } from './pointer.js';
 
 /**
@@ -46,6 +47,25 @@ const CANCEL_KEY_DEBOUNCE_MS = 250;
  * deliberate double tap and above the OS auto-repeat ramp.
  */
 const ORDER_KEY_DEBOUNCE_MS = 250;
+
+/**
+ * Holding `+`/`-` is meant to keep zooming, so the guard between repeats is
+ * short: about eight steps per second, which is faster than clicking but slow
+ * enough to stop on a level the player wants.
+ */
+const ZOOM_KEY_REPEAT_MS = 120;
+
+/**
+ * Camera bookmark slots. `Ctrl+F2..F4` saves (AoE2 default) and the bare key
+ * recalls. `Shift+F2..F4` saves too: `Ctrl+F4` closes the tab in Chrome, and
+ * `Alt+F4` closes the whole window at the OS level, so neither is a usable
+ * fallback for slot 3.
+ */
+const CAMERA_BOOKMARK_KEYS: Array<{ name: string; slot: number }> = [
+  { name: 'F2', slot: 1 },
+  { name: 'F3', slot: 2 },
+  { name: 'F4', slot: 3 }
+];
 
 type OrderMode = 'ATTACK_MOVE' | 'PATROL';
 
@@ -103,6 +123,8 @@ export class CommandController {
     this.bindCancelKey(keyboard);
     this.bindOrderKeys(keyboard);
     this.bindBuildingKeys(keyboard);
+    this.bindZoomKeys(keyboard);
+    this.bindCameraBookmarkKeys(keyboard);
     this.bindEscapeKey(keyboard);
     // Held-modifier state for the waypoint preview; not a hotkey.
     this.shiftKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
@@ -313,6 +335,70 @@ export class CommandController {
 
       event.preventDefault();
       this.scene.panTo(townCenter.gridX + townCenter.sizeX / 2, townCenter.gridY + townCenter.sizeY / 2);
+    });
+  }
+
+  /**
+   * `+` / `-` (and the numpad pair) step the camera zoom.
+   *
+   * Both keys of each pair map to the same guarded handler, so a held key emits
+   * one step per `ZOOM_KEY_REPEAT_MS` instead of one per frame. Ctrl/Alt/Cmd are
+   * refused: `Ctrl` and the numpad are also browser zoom shortcuts in some
+   * configurations, and this zoom must not fight the browser's.
+   */
+  private bindZoomKeys(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    const step = (direction: 1 | -1) =>
+      guardKey((event: KeyboardEvent) => {
+        if (event.ctrlKey || event.metaKey || event.altKey) return false;
+        event.preventDefault();
+        this.scene.zoomBySteps(direction);
+        return true;
+      }, ZOOM_KEY_REPEAT_MS);
+
+    const zoomIn = step(1);
+    const zoomOut = step(-1);
+
+    // 'PLUS' is the `=` key (keyCode 187) without Shift, which is the key '+'
+    // sits on for most layouts - binding the shifted form only would make the
+    // advertised hotkey need two keys on a US keyboard.
+    keyboard.on('keydown-PLUS', zoomIn);
+    keyboard.on('keydown-NUMPAD_ADD', zoomIn);
+    keyboard.on('keydown-MINUS', zoomOut);
+    keyboard.on('keydown-NUMPAD_SUBTRACT', zoomOut);
+  }
+
+  /**
+   * `Ctrl+F2..F4` saves a camera bookmark, `F2..F4` jumps back to it (AoE2).
+   * `Shift+F2..F4` also saves, for the slot the browser owns (`Ctrl+F4` closes
+   * the tab in Chrome). Alt is refused outright: `Alt+F4` closes the window
+   * before the page sees it, so capturing Alt here would only mislead.
+   *
+   * Recalling an empty slot reports `false`, so the guard does not swallow the
+   * next press once the slot has been saved.
+   */
+  private bindCameraBookmarkKeys(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    CAMERA_BOOKMARK_KEYS.forEach(({ name, slot }) => {
+      const recall = guardKey((event: KeyboardEvent) => {
+        event.preventDefault();
+        return this.scene.recallCameraBookmark(slot);
+      });
+
+      const save = guardKey((event: KeyboardEvent) => {
+        event.preventDefault();
+        this.scene.saveCameraBookmark(slot);
+        return true;
+      });
+
+      keyboard.on(`keydown-${name}`, (event: KeyboardEvent) => {
+        if (event.altKey) return;
+        // The bare key and the modifier form share one listener, so a save must
+        // never fall through and also jump on the same press.
+        if (event.ctrlKey || event.metaKey || event.shiftKey) {
+          save(event);
+          return;
+        }
+        recall(event);
+      });
     });
   }
 

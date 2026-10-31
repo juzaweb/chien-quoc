@@ -4,15 +4,17 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 
 ## Điều khiển
 
-- **Kéo camera bằng chuột giữa** (middle-drag pan). — *edge scroll đã chuyển sang `BUG-01b`*
-- **Alt + chuột phải** — giữ đội hình khi di chuyển.
-- **Bookmark camera** (`Ctrl+F2..F4` lưu, `F2..F4` gọi) — AoE2 hotkey mặc định.
-- **Space** — nhảy tới sự kiện gần nhất (báo động, tấn công).
-- **Xoay bản đồ** — AoE2 có `Ctrl+←/→`; hiện không có.
-- **Zoom bằng phím** `+` / `-`.
-- **Kéo chọn chỉ lính / chỉ dân** — AoE2 không có, nhưng nhiều RTS hiện đại có.
-- **Double-click công trình** — chọn toàn bộ công trình cùng loại.
-- **Tab** — nhảy giữa các công trình đang chọn.
+- **Alt + chuột phải** — chưa có tác dụng: `MOVE_UNITS` hiện **luôn** xếp đội hình
+  (`assignFormationTargets`), nên "giữ đội hình" là mặc định rồi. Cần chốt hướng:
+  (a) Alt = đi thẳng tới đúng điểm click (bỏ giãn đội hình), hay (b) Alt = giữ đội hình
+  đúng nghĩa AoE2, kéo theo việc bỏ xếp đội hình khỏi lệnh move thường.
+- **Space** — nhảy tới sự kiện gần nhất (báo động, tấn công). Hiện client chỉ có banner
+  notification tạm thời, chưa có event log để "sự kiện gần nhất" trỏ vào.
+- **Xoay bản đồ** — AoE2 có `Ctrl+←/→`; hiện không có. Nặng: `isoMath` + terrain + hit-test
+  đều giả định hướng cố định.
+- **Double-click công trình** — chọn toàn bộ công trình cùng loại. Cần mở rộng model
+  selection (hiện chỉ giữ một `selectedBuildingId`) và cả panel chi tiết.
+- **Tab** — nhảy giữa các công trình đang chọn. Phụ thuộc mục double-click ở trên.
 
 ## Combat
 
@@ -45,9 +47,17 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 - **Click vào HUD khi đang arm `A`/`P` không huỷ lệnh** — pointerdown không tới canvas nên lệnh
   vẫn armed; người chơi phải click ra đất rồi chuột phải/Esc. Nên cho panel HUD gọi
   `cancelPendingOrder()` để khớp cảm giác "click ra ngoài là huỷ".
+- **Mouseup trên HUD không tới canvas** (cùng gốc với mục trên): nhả chuột khi kết thúc
+  quét hộp trên một panel HUD thì `isDragSelecting` không được reset — hình chữ nhật còn
+  nằm đó tới lần click kế tiếp. Kéo camera bằng chuột giữa đã tự chữa (guard theo
+  `pointer.middleButtonDown()` trong `MiddleDragPan.update`), còn quét hộp thì chưa: nên
+  bind thêm mouseup ở `window` hoặc dùng cùng kiểu guard trong `handlePointerMove`.
 
 ## Kỹ thuật
 
+- **`WorldScene.ts` đã 902 dòng** (ngưỡng soi là ~1000): phần camera mới thêm (`zoomTo`,
+  `zoomBySteps`, `saveCameraBookmark`, `recallCameraBookmark`, `MiddleDragPan`) nên tách
+  thành `input/CameraController.ts` trước khi thêm gì nữa vào scene.
 - **Client prediction** cho lệnh move (hiện chờ snapshot → cảm giác trễ ~50ms).
 - **Snapshot diff / interpolation** mượt hơn — hiện `Phaser.Math.Linear(..., 0.25)` cố định,
   không phụ thuộc delta → tốc độ lerp thay đổi theo FPS.
@@ -65,8 +75,10 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
   không phải DOM repeat. `bindCancelKey` đã tự debounce (`CANCEL_KEY_DEBOUNCE_MS`), nhưng
   các binding cũ (`S`, `.`, `Ctrl/1..9`, `H`) chưa có guard tương đương. Hiện chưa gây lỗi
   vì các lệnh đó idempotent (`STOP_UNITS`/select lại cùng unit thì kết quả như cũ), nhưng
-  nên rà một lượt: thêm một helper dùng chung (timestamp debounce hoặc
-  `Phaser.Input.Keyboard.JustDown` trên `Key` object) thay vì mỗi `bind*` tự xử lý.
+  nên rà một lượt: helper dùng chung giờ đã có (`input/keyGuard.ts` → `guardKey`), mới chỉ
+  dùng cho zoom `+`/`-` và bookmark `F2..F4`; các `bind*` còn lại vẫn tự giữ timestamp
+  riêng (`lastCancelKeyAt`, `lastOrderKey`, `lastEscapeAt`) — gộp về `guardKey` khi có dịp
+  sửa các binding đó, đừng thêm kiểu debounce thứ tư.
 - **Path không lưu vào SQLite** — sau restart, unit đang `MOVING` được khôi phục với
   `targetX/targetY` cũ nhưng `pathX/pathY` rỗng nên đi thẳng. Chấp nhận được, nhưng nếu
   muốn đúng thì lưu thêm hoặc tính lại path lúc restore.

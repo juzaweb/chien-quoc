@@ -15,7 +15,8 @@ import { CommandController } from '../input/CommandController.js';
 import { CursorController } from '../input/CursorController.js';
 import { PlacementController } from '../input/PlacementController.js';
 import { SelectionController } from '../input/SelectionController.js';
-import { applyEdgeScroll } from '../input/cameraInput.js';
+import type { BoxSelectFilter } from '../input/SelectionController.js';
+import { applyEdgeScroll, MiddleDragPan } from '../input/cameraInput.js';
 import { EntityRenderer } from '../render/EntityRenderer.js';
 import { TerrainLayer } from '../render/TerrainLayer.js';
 
@@ -31,6 +32,42 @@ import { TerrainLayer } from '../render/TerrainLayer.js';
  */
 const CLICK_DRAG_THRESHOLD_WORLD_PX = 8;
 const CLICK_DRAG_MIN_SCREEN_PX = 6;
+
+/** Zoom range, shared by the wheel and the `+`/`-` hotkeys. */
+const ZOOM_MIN = 0.4;
+const ZOOM_MAX = 2.2;
+/** Wheel pixels to zoom units. */
+const WHEEL_ZOOM_SENSITIVITY = 0.001;
+/** Multiplier applied per `+`/`-` press: one press reads as a deliberate step. */
+const KEY_ZOOM_STEP = 1.2;
+
+/**
+ * Modifiers captured on pointerdown, then used by the click / box-select release
+ * (CTL-02).
+ *
+ * `additive` is Shift (add to the selection), `selectSameType` is Ctrl (a click
+ * takes every unit of the clicked type) and `filter` is what a drag is allowed to
+ * take: Ctrl-drag soldiers, Alt-drag villagers. Ctrl means "narrow to soldiers" on
+ * the drag path and "same type" on the click path, which is what makes one
+ * modifier cover both without a new key.
+ */
+interface SelectionMods {
+  additive: boolean;
+  selectSameType: boolean;
+  filter: BoxSelectFilter;
+}
+
+/** Plain left-drag: takes every owned unit it covers. */
+const NO_SELECTION_MODS: SelectionMods = { additive: false, selectSameType: false, filter: 'all' };
+
+function selectionModsFor(event: MouseEvent | undefined): SelectionMods {
+  const ctrl = !!event?.ctrlKey || !!event?.metaKey;
+  return {
+    additive: !!event?.shiftKey,
+    selectSameType: ctrl,
+    filter: event?.altKey ? 'villager' : ctrl ? 'military' : 'all'
+  };
+}
 
 export interface SelectedEntityData {
   id: string;
@@ -113,12 +150,15 @@ export class WorldScene extends Phaser.Scene {
   private dragStartScreen: { x: number; y: number } = { x: 0, y: 0 };
   private dragSelectionGraphics!: Phaser.GameObjects.Graphics;
 
+  /** Middle-button drag pan (AoE2: hold the middle button and drag the map). */
+  private middleDrag = new MiddleDragPan();
+
+  /** Camera bookmarks by slot, saved with `Ctrl/Shift+F2..F4` and recalled with `F2..F4`. */
+  private readonly cameraBookmarks = new Map<number, { x: number; y: number; zoom: number }>();
+
   // CTL-02: modifiers are captured on pointerdown because pointerup can report
   // them differently (the browser fires `contextmenu` early for ctrl-click).
-  private pendingSelectionMods: { additive: boolean; selectSameType: boolean } = {
-    additive: false,
-    selectSameType: false
-  };
+  private pendingSelectionMods: SelectionMods = NO_SELECTION_MODS;
 
   // React Callbacks
   public onSelectionChange: ((entity: SelectedEntityData | null) => void) | null = null;
@@ -263,9 +303,7 @@ export class WorldScene extends Phaser.Scene {
 
     // Mouse wheel zoom
     this.input.on('wheel', (pointer: Phaser.Input.Pointer, gameObjects: any, deltaX: number, deltaY: number) => {
-      const currentZoom = this.cameras.main.zoom;
-      const newZoom = Phaser.Math.Clamp(currentZoom - deltaY * 0.001, 0.4, 2.2);
-      this.cameras.main.setZoom(newZoom);
+      this.zoomTo(this.cameras.main.zoom - deltaY * WHEEL_ZOOM_SENSITIVITY);
     });
 
     // Pointer events for selection and actions
@@ -278,6 +316,14 @@ export class WorldScene extends Phaser.Scene {
     });
 
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      this.handlePointerUp(pointer);
+    });
+
+    // A release outside the canvas emits `pointerupoutside` *instead of*
+    // `pointerup`, and both middle-drag panning and box selection end on that
+    // event. Without this the camera would keep panning with the mouse until the
+    // next release inside the canvas.
+    this.input.on('pointerupoutside', (pointer: Phaser.Input.Pointer) => {
       this.handlePointerUp(pointer);
     });
 
@@ -440,9 +486,23 @@ export class WorldScene extends Phaser.Scene {
   // ---------------------------------------------------------------------------
 
   private handlePointerMove(pointer: Phaser.Input.Pointer) {
+    // Middle-drag pan moves the camera under a still pointer, so the world point
+    // below the cursor is recomputed first: the cursor and the waypoint preview
+    // both read it, and a stale one would pin them to the tile left behind.
+    const panning = this.middleDrag.update(this.cameras.main, pointer);
+
     const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
     const hoverGridCoord = screenToGrid(worldPoint.x, worldPoint.y);
     this.lastPointerWorld = { x: worldPoint.x, y: worldPoint.y };
+
+    // A pan owns the pointer: no hover highlight, no placement ghost and no box
+    // selection while the map is being dragged.
+    if (panning) {
+      this.hoverTileHighlight.setVisible(false);
+      this.cursor.refresh();
+      return;
+    }
+
     this.hasPointerMoved = true;
 
     // Snap highlight to grid tile
@@ -498,6 +558,16 @@ export class WorldScene extends Phaser.Scene {
     // button instead of trusting `rightButtonDown()`.
     const ctrlLeftClick = !!native && native.button === 0 && native.ctrlKey;
 
+    // Middle-button drag pans the map (AoE2). The default is suppressed so the
+    // browser does not start its own autoscroll on the canvas.
+    if (pointer.middleButtonDown()) {
+      native?.preventDefault();
+      if (!this.buildingToPlace) {
+        this.middleDrag.begin(pointer);
+        return;
+      }
+    }
+
     // CMD-01: an armed attack-move / patrol consumes the next left click as its
     // destination, before anything can start a drag selection box. Placement mode
     // keeps its click: the cursor is already promising a building there.
@@ -531,11 +601,9 @@ export class WorldScene extends Phaser.Scene {
       if (this.buildingToPlace) {
         this.placement.commit(pointer);
       } else {
-        // Start Drag selection box
-        this.pendingSelectionMods = {
-          additive: !!native?.shiftKey,
-          selectSameType: !!native?.ctrlKey || !!native?.metaKey
-        };
+        // Start Drag selection box. Modifiers are resolved here, from the native
+        // event, because the release can report them differently.
+        this.pendingSelectionMods = selectionModsFor(native);
         this.isDragSelecting = true;
         this.dragStartScreen = { x: pointer.x, y: pointer.y };
       }
@@ -543,6 +611,10 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private handlePointerUp(pointer: Phaser.Input.Pointer) {
+    // The middle button can be released outside the drag state (e.g. pressed
+    // while placing a building), so this is unconditional.
+    this.middleDrag.end();
+
     if (this.isDragSelecting) {
       this.isDragSelecting = false;
       this.dragSelectionGraphics.clear();
@@ -555,11 +627,16 @@ export class WorldScene extends Phaser.Scene {
       const dragDistanceWorld = screenDistance / zoom;
       const threshold = Math.max(CLICK_DRAG_THRESHOLD_WORLD_PX, CLICK_DRAG_MIN_SCREEN_PX / zoom);
       const mods = this.pendingSelectionMods;
-      this.pendingSelectionMods = { additive: false, selectSameType: false };
+      this.pendingSelectionMods = NO_SELECTION_MODS;
 
       if (dragDistanceWorld > threshold) {
         // Box Selection
-        this.selection.handleBoxSelect(this.dragStartScreen, { x: pointer.x, y: pointer.y }, mods.additive);
+        this.selection.handleBoxSelect(
+          this.dragStartScreen,
+          { x: pointer.x, y: pointer.y },
+          mods.additive,
+          mods.filter
+        );
       } else {
         // Single Click Selection
         this.selection.handleClick(pointer, mods.additive, mods.selectSameType);
@@ -602,6 +679,50 @@ export class WorldScene extends Phaser.Scene {
   public panTo(gridX: number, gridY: number) {
     const screenPos = gridToScreen(gridX, gridY);
     this.cameras.main.pan(screenPos.x, screenPos.y, 350, 'Power2');
+  }
+
+  /** Clamped zoom, shared by the wheel and the `+`/`-` hotkeys. */
+  public zoomTo(zoom: number) {
+    this.cameras.main.setZoom(Phaser.Math.Clamp(zoom, ZOOM_MIN, ZOOM_MAX));
+  }
+
+  /**
+   * One `+`/`-` press. Multiplicative so a step feels the same at every zoom,
+   * and clamped to the same range the wheel uses.
+   *
+   * @param steps `1` zooms in, `-1` zooms out.
+   */
+  public zoomBySteps(steps: number) {
+    this.zoomTo(this.cameras.main.zoom * Math.pow(KEY_ZOOM_STEP, steps));
+  }
+
+  /** Stores the current camera centre and zoom under `slot` (1-based). */
+  public saveCameraBookmark(slot: number) {
+    const camera = this.cameras.main;
+    this.cameraBookmarks.set(slot, { x: camera.midPoint.x, y: camera.midPoint.y, zoom: camera.zoom });
+    this.commands.showFeedback(camera.midPoint.x, camera.midPoint.y, 0x22c55e);
+  }
+
+  /**
+   * Jumps to a saved camera position, like AoE2's `F2..F4`.
+   *
+   * The zoom is restored before the centre so `centerOn` works in the final
+   * projection; doing it the other way round would land the camera off-centre.
+   *
+   * @returns false when the slot was never saved, so the caller can leave the
+   *   keystroke unclaimed.
+   */
+  public recallCameraBookmark(slot: number): boolean {
+    const bookmark = this.cameraBookmarks.get(slot);
+    if (!bookmark) return false;
+
+    // A minimap / `H` recentre is a 350 ms pan tween; leaving it running would
+    // drag the camera off the bookmark right after `centerOn`.
+    this.cameras.main.panEffect.reset();
+    this.zoomTo(bookmark.zoom);
+    this.cameras.main.centerOn(bookmark.x, bookmark.y);
+    this.commands.showFeedback(bookmark.x, bookmark.y, 0x38bdf8);
+    return true;
   }
 
   /**

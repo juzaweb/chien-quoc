@@ -174,9 +174,10 @@ export const App: React.FC = () => {
   };
 
   // Keyboard hotkeys live in the Phaser input layer (see CommandController):
-  // `S`, `A`/`P`, `H`, `.`, Delete, `Ctrl+1..9`, `Q/W/E/R/T` and Escape all route
-  // through one place that guards modifiers and Phaser's key re-emit. React only
-  // receives the two things it owns: the selection and the building being placed.
+  // `S`, `A`/`P`, `H`, `.`, Delete, `+`/`-`, `Ctrl+F2..F4` + `F2..F4` camera
+  // bookmarks, `Ctrl+1..9`, `Q/W/E/R/T` and Escape all route through one place
+  // that guards modifiers and Phaser's key re-emit. React only receives the two
+  // things it owns: the selection and the building being placed.
 
   const handleSelectBuilding = (type: BuildingType) => {
     setActiveBuildingType(type);

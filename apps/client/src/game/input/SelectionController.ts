@@ -11,6 +11,15 @@ import { pointerWorldPoint } from './pointer.js';
 const DOUBLE_CLICK_SAME_TYPE_MS = 350;
 
 /**
+ * Which unit categories a box-drag is allowed to take.
+ *
+ * AoE2 has no such modifier, but a mixed-box drag is the fastest way to lose a
+ * squad you meant to keep: without a filter the army is dragged along whenever
+ * villagers are boxed with soldiers.
+ */
+export type BoxSelectFilter = 'all' | 'military' | 'villager';
+
+/**
  * Owns which entity is selected: click, shift-click, box-drag, double-click and
  * control-group recall all funnel through here, so there is exactly one place
  * that mutates the selection sets and the ring/foundation graphics that show it.
@@ -147,7 +156,8 @@ export class SelectionController {
   handleBoxSelect(
     p1Screen: { x: number; y: number },
     p2Screen: { x: number; y: number },
-    additive = false
+    additive = false,
+    filter: BoxSelectFilter = 'all'
   ) {
     const scene = this.scene;
     const p1World = scene.cameras.main.getWorldPoint(p1Screen.x, p1Screen.y);
@@ -168,6 +178,11 @@ export class SelectionController {
       if (selectedCount >= MAX_SELECTION) return;
       const unit = scene.room?.state.units.get(unitId);
       if (unit && unit.ownerId === scene.mySessionId && !scene.selectedUnitIds.has(unitId)) {
+        // Ctrl-drag takes only soldiers, Alt-drag only villagers. Ownership is
+        // already checked above, so an enemy unit can never slip in.
+        if (filter === 'villager' && unit.type !== 'VILLAGER') return;
+        if (filter === 'military' && unit.type === 'VILLAGER') return;
+
         // Same body box as hitTestUnit, as an AABB so partial overlap still counts.
         const { centerY, radiusX, radiusY } = getUnitBodyBox(container);
         const unitLeft = container.x - radiusX;

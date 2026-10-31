@@ -180,11 +180,27 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             <span className="text-amber-400 font-mono">mép màn hình</span> để di chuyển camera
           </div>
           <div>
-            Cuộn <span className="text-amber-400 font-mono">Chuột</span> để phóng to/thu nhỏ
+            Cuộn <span className="text-amber-400 font-mono">Chuột</span> để phóng to/thu nhỏ,{' '}
+            <span className="text-amber-400 font-mono">+</span> /{' '}
+            <span className="text-amber-400 font-mono">-</span> để zoom từng nấc
+          </div>
+          <div>
+            Giữ <span className="text-amber-400 font-mono">Chuột giữa</span> và kéo để di chuyển
+            camera
+          </div>
+          <div>
+            <span className="text-amber-400 font-mono">Ctrl</span> /{' '}
+            <span className="text-amber-400 font-mono">Shift</span> +{' '}
+            <span className="text-amber-400 font-mono">F2..F4</span> lưu vị trí camera,{' '}
+            <span className="text-amber-400 font-mono">F2..F4</span> nhảy về vị trí đã lưu
           </div>
           <div>
             <span className="text-amber-400 font-mono">Chuột trái</span> chọn / quét quân,{' '}
             <span className="text-amber-400 font-mono">Chuột phải</span> điều quân & khai thác
+          </div>
+          <div>
+            <span className="text-amber-400 font-mono">Ctrl + kéo</span> chỉ quét lính,{' '}
+            <span className="text-amber-400 font-mono">Alt + kéo</span> chỉ quét nông dân
           </div>
           <div>
             <span className="text-amber-400 font-mono">Shift</span> + click để cộng/bớt quân,{' '}
