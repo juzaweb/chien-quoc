@@ -26,7 +26,6 @@ import {
   CancelBuildingPayload,
   SERVER_TICK_RATE,
   UNIT_BLUEPRINTS,
-  UnitBlueprint,
   UnitType,
   canTrainUnitsAt,
   isDirtRoadTile
@@ -38,7 +37,7 @@ import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
 import { getBuildApproachPoint, isWithinBuildRange, syncBuilders } from './construction.js';
 import { EconomySystem } from './EconomySystem.js';
-import { distanceToFootprint } from './geometry.js';
+import { CombatSystem } from './CombatSystem.js';
 import { Pathfinder } from '../services/Pathfinder.js';
 
 const PLAYER_COLORS = [
@@ -124,13 +123,20 @@ interface WorldRoomAuth {
 
 export class WorldRoom extends Room<{ state: WorldState }> {
   private nextEntityId: number = 1000;
-  private attackTimers: Map<string, number> = new Map();
   /**
-   * SIM-03: remaining cooldown per defensive building, keyed by building id.
-   * Separate from `attackTimers` because that map is keyed by unit id and only
-   * touched by `processUnitCombat`.
+   * Combat rules (damage, cooldowns, target resolution) and their transient
+   * maps. Built on first use for the same reason as {@link economySystem}.
    */
-  private towerTimers: Map<string, number> = new Map();
+  private combatSystem: CombatSystem | null = null;
+  /** Built on first use; see {@link combatSystem}. */
+  private get combat(): CombatSystem {
+    this.combatSystem ??= new CombatSystem(this.state, {
+      resumeQueuedWaypoint: (unit) => this.resumeQueuedWaypoint(unit),
+      forgetEconomyState: (unitId) => this.economy.forgetUnit(unitId),
+      updatePlayerPopulation: (ownerId) => this.updatePlayerPopulation(ownerId)
+    });
+    return this.combatSystem;
+  }
   /**
    * Economy rules (gathering, carrying, drop-off) and their transient maps.
    *
@@ -957,61 +963,6 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
   }
 
-  /**
-   * Ends a fight (CMD-01).
-   *
-   * The unit remembers what it was doing before it engaged in
-   * `previousActionState`: an attack-move keeps walking to its destination, a
-   * patrol keeps walking its route. Anything else falls back to the queued
-   * waypoints, exactly like a finished plain attack.
-   */
-  private endAttackOrder(unit: UnitState) {
-    const resume = unit.previousActionState;
-    unit.previousActionState = '';
-
-    if (resume === 'ATTACK_MOVE' || resume === 'PATROL') {
-      unit.targetEntityId = '';
-      unit.targetEntityType = '';
-      unit.actionState = resume;
-      return;
-    }
-
-    this.resumeQueuedWaypoint(unit);
-  }
-
-  /**
-   * Whether the unit's attack target still exists in the snapshot. A unit with no
-   * target at all counts as gone, so an `ATTACKING` state can never survive
-   * without something to hit.
-   */
-  private isAttackTargetAlive(unit: UnitState): boolean {
-    if (!unit.targetEntityId) return false;
-    if (unit.targetEntityType === 'unit') return this.state.units.has(unit.targetEntityId);
-    if (unit.targetEntityType === 'building') return this.state.buildings.has(unit.targetEntityId);
-    return false;
-  }
-
-  /**
-   * Closest enemy unit within `radius` tiles, or null. Buildings are deliberately
-   * excluded: an attack-moving squad should engage soldiers, not stop to batter
-   * a wall it walks past.
-   */
-  private findNearestEnemyUnit(unit: UnitState, radius: number): UnitState | null {
-    let nearest: UnitState | null = null;
-    let nearestDist = radius;
-
-    this.state.units.forEach((other: UnitState) => {
-      if (other.ownerId === unit.ownerId) return;
-      const dist = Math.hypot(other.x - unit.x, other.y - unit.y);
-      if (dist <= nearestDist) {
-        nearest = other;
-        nearestDist = dist;
-      }
-    });
-
-    return nearest;
-  }
-
   private handleTrainUnit(client: Client, payload: TrainUnitPayload) {
     const player = this.state.players.get(client.sessionId);
     const building = this.state.buildings.get(payload.buildingId);
@@ -1122,7 +1073,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     // Units walking to or attacking the foundation resolve the missing target
     // on their next tick, so nothing has to be repointed here.
     this.state.buildings.delete(building.id);
-    this.towerTimers.delete(building.id);
+    this.combat.forgetBuilding(building.id);
   }
 
   /**
@@ -1462,7 +1413,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       if (building.isConstructed) {
         const attackBlueprint = BUILDING_BLUEPRINTS[building.type as BuildingType];
         if (attackBlueprint && attackBlueprint.attackRange > 0) {
-          this.processTowerCombat(building, deltaTime, attackBlueprint);
+          this.combat.updateTowerCombat(building, deltaTime, attackBlueprint);
         }
       }
 
@@ -1485,25 +1436,15 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       if (!blueprint) return;
 
       // CMD-01: before taking a step, an attack-moving or patrolling unit checks
-      // for the closest enemy inside its aggro radius. Switching to ATTACKING
-      // parks the current order in `previousActionState` so the unit picks it up
-      // again once the fight is over.
-      if ((unit.actionState === 'ATTACK_MOVE' || unit.actionState === 'PATROL') && blueprint.aggroRadius > 0) {
-        const enemy = this.findNearestEnemyUnit(unit, blueprint.aggroRadius);
-        if (enemy) {
-          unit.previousActionState = unit.actionState;
-          unit.actionState = 'ATTACKING';
-          unit.targetEntityId = enemy.id;
-          unit.targetEntityType = 'unit';
-        }
-      }
+      // for the closest enemy inside its aggro radius.
+      this.combat.acquireAggroTarget(unit, blueprint.aggroRadius);
 
       // A fight whose target was destroyed, killed by someone else or simply
       // removed from the snapshot resumes the stored order instead of leaving the
       // unit standing with a dangling target id. ATTACKING with no target at all
       // is the same dead end, so it takes the same exit.
-      if (unit.actionState === 'ATTACKING' && !this.isAttackTargetAlive(unit)) {
-        this.endAttackOrder(unit);
+      if (unit.actionState === 'ATTACKING' && !this.combat.isTargetAlive(unit)) {
+        this.combat.endAttackOrder(unit);
       }
 
       // Movement handling
@@ -1590,7 +1531,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
       // Attack combat handling
       if (unit.actionState === 'ATTACKING' && unit.targetEntityId) {
-        this.processUnitCombat(unit, deltaTime);
+        this.combat.updateUnitCombat(unit, deltaTime);
       }
 
       // Harvesting and carrying (CMD-06 / SIM-02)
@@ -1650,123 +1591,6 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     this.state.units.set(uId, unit);
     this.updatePlayerPopulation(ownerId);
-  }
-
-  private processUnitCombat(unit: UnitState, deltaTime: number) {
-    const blueprint = UNIT_BLUEPRINTS[unit.type as UnitType];
-    if (!blueprint) return;
-
-    const timerKey = `atk_${unit.id}`;
-    let remainingCooldown = this.attackTimers.get(timerKey) || 0;
-    remainingCooldown -= deltaTime;
-
-    if (remainingCooldown <= 0) {
-      if (unit.targetEntityType === 'unit') {
-        const targetUnit = this.state.units.get(unit.targetEntityId);
-        if (targetUnit && targetUnit.ownerId !== unit.ownerId) {
-          const dist = Math.hypot(targetUnit.x - unit.x, targetUnit.y - unit.y);
-          if (dist <= blueprint.attackRange + 0.5) {
-            targetUnit.hp -= blueprint.attackPower;
-            this.attackTimers.set(timerKey, blueprint.attackCooldownMs);
-
-            if (targetUnit.hp <= 0) {
-              const victimOwner = targetUnit.ownerId;
-              this.state.units.delete(targetUnit.id);
-              // Transient harvest state must not outlive the unit.
-              this.economy.forgetUnit(targetUnit.id);
-              this.updatePlayerPopulation(victimOwner);
-              this.endAttackOrder(unit);
-            }
-          }
-        } else {
-          // Target died or changed hands: the order is over.
-          this.endAttackOrder(unit);
-        }
-      } else if (unit.targetEntityType === 'building') {
-        const targetBuilding = this.state.buildings.get(unit.targetEntityId);
-        if (targetBuilding && targetBuilding.ownerId !== unit.ownerId) {
-          const centerX = targetBuilding.gridX + targetBuilding.sizeX / 2;
-          const centerY = targetBuilding.gridY + targetBuilding.sizeY / 2;
-          const dist = Math.hypot(centerX - unit.x, centerY - unit.y);
-          if (dist <= blueprint.attackRange + 1.5) {
-            targetBuilding.hp -= blueprint.attackPower;
-            this.attackTimers.set(timerKey, blueprint.attackCooldownMs);
-
-            if (targetBuilding.hp <= 0) {
-              const bOwner = targetBuilding.ownerId;
-              this.state.buildings.delete(targetBuilding.id);
-              this.towerTimers.delete(targetBuilding.id);
-              this.updatePlayerPopulation(bOwner);
-              this.endAttackOrder(unit);
-            }
-          }
-        } else {
-          // Building destroyed or captured by its owner: order over.
-          this.endAttackOrder(unit);
-        }
-      }
-    } else {
-      this.attackTimers.set(timerKey, remainingCooldown);
-    }
-  }
-
-  /**
-   * SIM-03: fires a defensive building's shot at the closest enemy unit in range.
-   *
-   * The cooldown counts down every tick and is only reset when a shot actually
-   * lands, so a tower that had nothing to shoot fires the moment a target walks
-   * in instead of waiting out a timer it never used.
-   */
-  private processTowerCombat(
-    building: BuildingState,
-    deltaTime: number,
-    blueprint: BuildingBlueprint
-  ) {
-    let remainingCooldown = (this.towerTimers.get(building.id) ?? 0) - deltaTime;
-
-    if (remainingCooldown > 0) {
-      this.towerTimers.set(building.id, remainingCooldown);
-      return;
-    }
-
-    const target = this.findNearestEnemyUnitInRange(building, blueprint.attackRange);
-    if (!target) {
-      // Ready, but nothing in range: stay at zero so the next arrival is shot
-      // immediately rather than after a fresh cooldown.
-      this.towerTimers.set(building.id, 0);
-      return;
-    }
-
-    target.hp -= blueprint.attackPower;
-    this.towerTimers.set(building.id, blueprint.attackCooldownMs);
-
-    if (target.hp <= 0) {
-      const victimOwner = target.ownerId;
-      this.state.units.delete(target.id);
-      // Transient harvest state must not outlive the unit.
-      this.economy.forgetUnit(target.id);
-      this.updatePlayerPopulation(victimOwner);
-    }
-  }
-
-  /**
-   * Closest enemy unit inside a building's range, measured from the footprint
-   * edge so `attackRange` means the same thing for every footprint size.
-   */
-  private findNearestEnemyUnitInRange(building: BuildingState, range: number): UnitState | null {
-    let nearest: UnitState | null = null;
-    let nearestDist = range;
-
-    this.state.units.forEach((other: UnitState) => {
-      if (other.ownerId === building.ownerId) return;
-      const dist = distanceToFootprint(other.x, other.y, building);
-      if (dist <= nearestDist) {
-        nearest = other;
-        nearestDist = dist;
-      }
-    });
-
-    return nearest;
   }
 
   /**

@@ -621,3 +621,81 @@ describe('tower combat (SIM-03)', () => {
     expect(enemy.hp).toBe(maxHp - 20);
   });
 });
+
+describe('combat cooldown bookkeeping', () => {
+  it('resumes the stored order on the tick its target dies', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    addPlayer(room, 'player-b');
+    const attacker = addUnit(room, {
+      id: 'u_1', ownerId: 'player-a', type: 'SPEARMAN', x: 10, y: 10, actionState: 'ATTACKING'
+    });
+    attacker.previousActionState = 'ATTACK_MOVE';
+    const victim = addUnit(room, { id: 'u_2', ownerId: 'player-b', type: 'VILLAGER', x: 11, y: 10 });
+    victim.hp = 1;
+    attacker.targetEntityId = victim.id;
+    attacker.targetEntityType = 'unit';
+
+    internals(room).update(100);
+
+    expect(room.state.units.has(victim.id)).toBe(false);
+    expect(attacker.actionState).toBe('ATTACK_MOVE');
+    expect(attacker.targetEntityId).toBe('');
+  });
+
+  it('drops a unit cooldown when that unit is killed', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    addPlayer(room, 'player-b');
+    const enemy = addUnit(room, {
+      id: 'u_1', ownerId: 'player-a', type: 'SPEARMAN', x: 10, y: 10
+    });
+    const victim = addUnit(room, {
+      id: 'u_2', ownerId: 'player-b', type: 'VILLAGER', x: 11, y: 10, actionState: 'ATTACKING'
+    });
+    victim.targetEntityId = enemy.id;
+    victim.targetEntityType = 'unit';
+
+    // Tick 1: the villager lands its own hit, which is what puts it in the
+    // cooldown map. Killing it in the same tick would not, because the tick
+    // deletes it before its turn comes around.
+    internals(room).update(100);
+    const combat = internals(room).combat;
+    expect(enemy.hp).toBe(UNIT_BLUEPRINTS.SPEARMAN.maxHp - UNIT_BLUEPRINTS.VILLAGER.attackPower);
+    expect(combat.attackTimers.has(victim.id)).toBe(true);
+
+    // Tick 2: a tower finishes it off mid-cooldown.
+    addBuilding(room, { id: 'b_1', ownerId: 'player-a', type: 'TOWER', gridX: 11, gridY: 9 });
+    victim.hp = 1;
+    internals(room).update(100);
+
+    expect(room.state.units.has(victim.id)).toBe(false);
+    expect(combat.attackTimers.has(victim.id)).toBe(false);
+    // The villager was the only unit with a cooldown, so the map must be empty.
+    expect(combat.attackTimers.size).toBe(0);
+  });
+
+  it('drops a tower cooldown when the tower is destroyed', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    addPlayer(room, 'player-b');
+    const tower = addBuilding(room, { id: 'b_1', ownerId: 'player-a', type: 'TOWER', gridX: 40, gridY: 40 });
+    tower.hp = 1;
+    // Standing on the tower's own tile (distance 0) so it is unambiguously the
+    // target of the shot this tick.
+    const bystander = addUnit(room, { id: 'u_2', ownerId: 'player-b', x: 40.5, y: 40.5 });
+    const attacker = addUnit(room, {
+      id: 'u_1', ownerId: 'player-b', type: 'SPEARMAN', x: 41, y: 42, actionState: 'ATTACKING'
+    });
+    attacker.targetEntityId = tower.id;
+    attacker.targetEntityType = 'building';
+
+    internals(room).update(100);
+
+    const combat = internals(room).combat;
+    // The tower fired first this tick, which is what puts it in the map.
+    expect(bystander.hp).toBe(UNIT_BLUEPRINTS.VILLAGER.maxHp - BUILDING_BLUEPRINTS.TOWER.attackPower);
+    expect(room.state.buildings.has(tower.id)).toBe(false);
+    expect(combat.towerTimers.has(tower.id)).toBe(false);
+  });
+});
