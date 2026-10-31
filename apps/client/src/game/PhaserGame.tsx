@@ -11,6 +11,8 @@ interface PhaserGameProps {
   onPlacementCancelled: () => void;
   /** A build hotkey (`Q/W/E/R/T`) was pressed; opens React's placement state. */
   onBuildingHotkey: (type: BuildingType) => void;
+  /** ECO-02: the number of this player's idle villagers changed. */
+  onIdleVillagersChange: (count: number) => void;
   gameRef: React.MutableRefObject<Phaser.Game | null>;
   sceneRef: React.MutableRefObject<WorldScene | null>;
 }
@@ -21,6 +23,7 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
   onSelectionChange,
   onPlacementCancelled,
   onBuildingHotkey,
+  onIdleVillagersChange,
   gameRef,
   sceneRef
 }) => {
@@ -29,9 +32,11 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
   const playerNameRef = useRef(playerName);
   const roomRef = useRef(room);
   const onBuildingHotkeyRef = useRef(onBuildingHotkey);
+  const onIdleVillagersRef = useRef(onIdleVillagersChange);
   playerNameRef.current = playerName;
   roomRef.current = room;
   onBuildingHotkeyRef.current = onBuildingHotkey;
+  onIdleVillagersRef.current = onIdleVillagersChange;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -90,6 +95,7 @@ export const PhaserGame: React.FC<PhaserGameProps> = ({
         // Read through a ref: the scene outlives every React render, and this
         // bootstrap closure only runs once.
         scene.onBuildingHotkey = (type) => onBuildingHotkeyRef.current(type);
+        scene.onIdleVillagersChange = (count) => onIdleVillagersRef.current(count);
 
         // Dev-only handle so browser tests can inspect state that the React HUD
         // does not expose (selection sets, camera, sprites).

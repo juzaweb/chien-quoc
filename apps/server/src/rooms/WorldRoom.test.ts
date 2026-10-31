@@ -472,6 +472,162 @@ describe('gathering and drop-off (SIM-02)', () => {
   });
 });
 
+describe('farm gathering (ECO-01)', () => {
+  /** A villager standing at a field's edge, already ordered to work it. */
+  function farmScenario(options: { farmFood?: number; wood?: number } = {}) {
+    const { farmFood = 250, wood = 0 } = options;
+    const room = createRoom();
+    const player = addPlayer(room, 'player-a', { wood, food: 0 });
+
+    const farm = addBuilding(room, { id: 'b_farm', ownerId: 'player-a', type: 'FARM', gridX: 50, gridY: 50 });
+    farm.resourceAmount = farmFood;
+    farm.resourceCapacity = BUILDING_BLUEPRINTS.FARM.gatherCapacity ?? 0;
+    addBuilding(room, { id: 'b_tc', ownerId: 'player-a', type: 'TOWN_CENTER', gridX: 40, gridY: 52 });
+
+    // Just outside the 3x3 footprint, so the field is worked from its edge.
+    const unit = addUnit(room, {
+      id: 'u_1',
+      ownerId: 'player-a',
+      x: 49,
+      y: 51.5,
+      actionState: 'HARVESTING'
+    });
+    unit.targetEntityId = farm.id;
+    unit.targetEntityType = 'farm';
+
+    return { room, player, farm, unit, client: createClient('player-a') };
+  }
+
+  it('harvests food from the field instead of the ground', () => {
+    const { room, player, farm, unit } = farmScenario();
+
+    internals(room).update(1000);
+
+    expect(unit.carryingAmount).toBe(UNIT_BLUEPRINTS.VILLAGER.carryCapacity);
+    expect(unit.carryingResourceType).toBe('food');
+    expect(farm.resourceAmount).toBe(250 - UNIT_BLUEPRINTS.VILLAGER.carryCapacity);
+    expect(player.food).toBe(0);
+    expect(unit.actionState).toBe('RETURNING');
+    expect(unit.dropOffId).toBe('b_tc');
+  });
+
+  it('banks the load at the town center and returns to the field', () => {
+    const { room, player, unit } = farmScenario();
+    const capacity = UNIT_BLUEPRINTS.VILLAGER.carryCapacity;
+
+    internals(room).update(1000);
+    expect(unit.actionState).toBe('RETURNING');
+
+    let delivered = false;
+    for (let i = 0; i < 400 && !delivered; i++) {
+      internals(room).update(100);
+      delivered = player.food === capacity;
+    }
+
+    expect(delivered).toBe(true);
+    expect(unit.actionState).toBe('HARVESTING');
+    expect(unit.targetEntityId).toBe('b_farm');
+    expect(unit.targetEntityType).toBe('farm');
+  });
+
+  it('re-sows an emptied field for the farm cost and keeps working', () => {
+    const { room, player, farm, unit } = farmScenario({ farmFood: 5, wood: 60 });
+
+    internals(room).update(1000);
+
+    // Five units left on the field, so five are carried and the field is paid for.
+    expect(unit.carryingAmount).toBe(5);
+    expect(player.wood).toBe(0);
+    expect(farm.resourceAmount).toBe(BUILDING_BLUEPRINTS.FARM.gatherCapacity);
+    expect(farm.resourceCapacity).toBe(BUILDING_BLUEPRINTS.FARM.gatherCapacity);
+  });
+
+  it('stop working a field it cannot re-sow, but keeps the load', () => {
+    const { room, player, farm, unit } = farmScenario({ farmFood: 5, wood: 0 });
+
+    internals(room).update(1000);
+    // Empty and unaffordable: the load in hand is banked, not thrown away.
+    internals(room).update(1000);
+
+    expect(farm.resourceAmount).toBe(0);
+    expect(player.wood).toBe(0);
+    expect(unit.carryingAmount).toBe(5);
+    expect(unit.actionState).toBe('RETURNING');
+  });
+
+  it('refuses a harvest order on an empty farm', () => {
+    const { room, farm, client } = farmScenario({ farmFood: 0 });
+
+    internals(room).economy.handleHarvestOrder(client, { unitIds: ['u_1'], buildingId: farm.id });
+
+    expect(farm.resourceAmount).toBe(0);
+    expect(client.send).toHaveBeenCalledWith(NetworkMessage.ERROR_NOTIFICATION, { message: 'Farm is empty' });
+  });
+
+  it('refuses a harvest order on a farm owned by somebody else', () => {
+    const { room, farm } = farmScenario();
+    const stranger = createClient('player-b');
+
+    internals(room).economy.handleHarvestOrder(stranger, { unitIds: ['u_1'], buildingId: farm.id });
+
+    expect(stranger.send).toHaveBeenCalledWith(NetworkMessage.ERROR_NOTIFICATION, {
+      message: 'That farm is not yours'
+    });
+  });
+
+  it('banks the load and stops when the field is raised mid-harvest', () => {
+    const { room, farm, unit } = farmScenario();
+    unit.carryingAmount = 4;
+    unit.carryingResourceType = 'food';
+    room.state.buildings.delete(farm.id);
+
+    internals(room).update(1000);
+
+    // The load is banked; the target is kept so the resumed order can discover
+    // the field is gone and retarget (see `startReturning`).
+    expect(unit.actionState).toBe('RETURNING');
+    expect(unit.carryingAmount).toBe(4);
+    expect(unit.dropOffId).toBe('b_tc');
+  });
+
+  it('drops back to idle when an empty-handed field disappears', () => {
+    const { room, farm, unit } = farmScenario();
+    room.state.buildings.delete(farm.id);
+
+    internals(room).update(1000);
+
+    expect(unit.actionState).toBe('IDLE');
+    expect(unit.targetEntityType).toBe('');
+    expect(unit.targetEntityId).toBe('');
+  });
+
+  it('starts a finished farm full and leaves a foundation empty', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    const foundation = addBuilding(room, {
+      id: 'b_1',
+      ownerId: 'player-a',
+      type: 'FARM',
+      gridX: 40,
+      gridY: 40,
+      isConstructed: false
+    });
+    const builder = addUnit(room, { id: 'u_1', ownerId: 'player-a', x: 42.2, y: 41, actionState: 'BUILDING' });
+    builder.targetEntityId = 'b_1';
+    builder.targetEntityType = 'building';
+
+    internals(room).update(100);
+    expect(foundation.resourceAmount).toBe(0);
+
+    for (let elapsed = 0; elapsed < BUILDING_BLUEPRINTS.FARM.buildTimeMs + 500; elapsed += 100) {
+      internals(room).update(100);
+    }
+
+    expect(foundation.isConstructed).toBe(true);
+    expect(foundation.resourceAmount).toBe(BUILDING_BLUEPRINTS.FARM.gatherCapacity);
+  });
+});
+
 describe('pathfinding (SIM-01)', () => {
   /** Runs ticks until `done()` or the budget runs out. */
   function tickUntil(room: WorldRoom, done: () => boolean, maxTicks = 600, tickMs = 100) {

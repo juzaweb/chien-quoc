@@ -9,7 +9,7 @@ import {
 } from '@chien-quoc/shared';
 import * as Phaser from 'phaser';
 import type { WorldScene } from '../scenes/WorldScene.js';
-import { findBuildingAt, findOwnFoundationAt, findResourceAt, findUnitAt } from './hitTest.js';
+import { findBuildingAt, findOwnFoundationAt, findOwnGatherableAt, findResourceAt, findUnitAt } from './hitTest.js';
 import { guardKey } from './keyGuard.js';
 import { pointerWorldGrid, pointerWorldPoint } from './pointer.js';
 
@@ -596,6 +596,21 @@ export class CommandController {
       scene.room.send(NetworkMessage.HARVEST_RESOURCE, {
         unitIds: Array.from(scene.selectedUnitIds),
         resourceNodeId: targetResourceNodeId
+      });
+      this.showFeedback(worldPoint.x, worldPoint.y, 0xf59e0b);
+      return;
+    }
+
+    // 4b. ECO-01: right-clicking an own finished farm puts the villagers to work
+    // on the field itself. Same rule as the build site above — a worker order on
+    // your own building — so the cursor and the click agree on what a harvest
+    // click means, and a mixed or military selection keeps falling through to a
+    // move order.
+    const ownFarmId = findOwnGatherableAt(scene, targetGrid);
+    if (ownFarmId && scene.selection.isAllVillagers()) {
+      scene.room.send(NetworkMessage.HARVEST_RESOURCE, {
+        unitIds: Array.from(scene.selectedUnitIds),
+        buildingId: ownFarmId
       });
       this.showFeedback(worldPoint.x, worldPoint.y, 0xf59e0b);
       return;

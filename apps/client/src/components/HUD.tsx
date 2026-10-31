@@ -11,6 +11,10 @@ interface HUDProps {
   population: number;
   populationCap: number;
   isConnected: boolean;
+  /** ECO-02: villagers standing idle, AoE2-style idle counter. */
+  idleVillagers: number;
+  /** ECO-02: jumps to the next idle villager, like pressing `.`. */
+  onSelectIdleVillager: () => void;
 }
 
 export const HUD: React.FC<HUDProps> = ({
@@ -22,7 +26,9 @@ export const HUD: React.FC<HUDProps> = ({
   stone,
   population,
   populationCap,
-  isConnected
+  isConnected,
+  idleVillagers,
+  onSelectIdleVillager
 }) => {
   return (
     <div className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none select-none z-20">
@@ -122,6 +128,27 @@ export const HUD: React.FC<HUDProps> = ({
             {population} / {populationCap}
           </span>
         </div>
+
+        {/* Divider */}
+        <div className="h-5 w-px bg-slate-700" />
+
+        {/* ECO-02: idle villagers, AoE2's idle counter. Clicking jumps to the
+            next one, exactly like pressing `.`. */}
+        <button
+          type="button"
+          onClick={onSelectIdleVillager}
+          disabled={idleVillagers === 0}
+          data-idle-villagers={idleVillagers}
+          title="Nông dân đang rảnh (phím .)"
+          className={`flex items-center gap-1.5 transition-colors ${
+            idleVillagers > 0
+              ? 'text-amber-300 hover:text-amber-200 cursor-pointer'
+              : 'text-slate-500 cursor-default'
+          }`}
+        >
+          <Users size={15} className={idleVillagers > 0 ? 'animate-pulse' : ''} />
+          <span className="font-semibold text-sm tabular-nums">{idleVillagers}</span>
+        </button>
       </div>
 
       {/* Network Status indicator */}

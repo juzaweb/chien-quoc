@@ -43,6 +43,15 @@ const WHEEL_ZOOM_SENSITIVITY = 0.001;
 const KEY_ZOOM_STEP = 1.2;
 
 /**
+ * ECO-02: how often the idle-villager count is recomputed, in milliseconds.
+ *
+ * The HUD only needs to look live, and scanning every owned unit at 60 Hz to
+ * publish a number React would re-render anyway is wasted work — four scans a
+ * second are indistinguishable from instant and cost nothing.
+ */
+const IDLE_VILLAGER_SCAN_MS = 250;
+
+/**
  * Modifiers captured on pointerdown, then used by the click / box-select release
  * (CTL-02).
  *
@@ -175,8 +184,16 @@ export class WorldScene extends Phaser.Scene {
    * building type and the placement panel reads it.
    */
   public onBuildingHotkey: ((type: BuildingType) => void) | null = null;
+  /**
+   * ECO-02: published whenever the number of this player's idle villagers
+   * changes, so the HUD can show the AoE idle-counter without scanning state.
+   */
+  public onIdleVillagersChange: ((count: number) => void) | null = null;
   /** Last `hp|carrying|actionState` string published to the entity panel. */
   private lastUnitDetailSignature = '';
+  /** ECO-02: last count published, and when the next scan is allowed. */
+  private lastIdleVillagerCount = -1;
+  private nextIdleVillagerScanAt = 0;
 
   // Behaviour modules. Constructed in create() so they can allocate Phaser
   // objects; every one of them reads this scene's state rather than keeping a copy.
@@ -786,7 +803,11 @@ export class WorldScene extends Phaser.Scene {
           isOwner: b.ownerId === this.mySessionId,
           trainingQueue: Array.from(b.trainingQueue),
           isConstructed: b.isConstructed,
-          constructionProgress: b.constructionProgress
+          constructionProgress: b.constructionProgress,
+          // ECO-01: what is left to gather from a farm, shown with the same
+          // "remaining / max" block a resource node uses.
+          remainingAmount: b.resourceCapacity > 0 ? b.resourceAmount : undefined,
+          maxAmount: b.resourceCapacity > 0 ? b.resourceCapacity : undefined
         });
         return;
       }
@@ -892,6 +913,34 @@ export class WorldScene extends Phaser.Scene {
     this.focus.render();
 
     this.syncSelectedUnitDetails();
+    this.publishIdleVillagerCount(time);
+  }
+
+  /**
+   * ECO-02: publishes this player's idle-villager count when it changes.
+   *
+   * Only a bare `IDLE` villager counts: one walking home, harvesting or building
+   * is working, and flagging it would make the number impossible to clear. The
+   * scan is throttled (see `IDLE_VILLAGER_SCAN_MS`) and the callback only fires
+   * on an actual change, so React does not re-render four times a second on a
+   * steady number.
+   */
+  private publishIdleVillagerCount(time: number) {
+    if (!this.onIdleVillagersChange || !this.room) return;
+    if (time < this.nextIdleVillagerScanAt) return;
+    this.nextIdleVillagerScanAt = time + IDLE_VILLAGER_SCAN_MS;
+
+    let count = 0;
+    this.room.state.units.forEach((unit: any) => {
+      if (unit.type !== 'VILLAGER') return;
+      if (unit.actionState !== 'IDLE') return;
+      if (!this.isOwnBuilding(unit.ownerId)) return;
+      count++;
+    });
+
+    if (count === this.lastIdleVillagerCount) return;
+    this.lastIdleVillagerCount = count;
+    this.onIdleVillagersChange(count);
   }
 
   /**

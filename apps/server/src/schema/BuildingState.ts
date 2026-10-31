@@ -24,5 +24,13 @@ export class BuildingState extends Schema {
    * the source of truth.
    */
   @type(['string']) builderUnitIds = new ArraySchema<string>();
+  /**
+   * ECO-01: what is left to gather from this building. Only farms use it today
+   * (`BUILDING_BLUEPRINTS[type].gatheredResource`), and a farm at 0 is fallow
+   * until somebody re-sows it. `resourceCapacity` is replicated too so the panel
+   * can show a fraction without re-reading the blueprint on the client.
+   */
+  @type('number') resourceAmount: number = 0;
+  @type('number') resourceCapacity: number = 0;
 }
 

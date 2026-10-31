@@ -8,6 +8,7 @@ theo từng bước nhỏ, mỗi bước là một thay đổi độc lập có 
 - Phase 1 — Selection & hotkey: [`02-selection-and-controls.md`](./02-selection-and-controls.md)
 - Phase 2 — Command & combat: [`03-commands-and-combat.md`](./03-commands-and-combat.md)
 - Phase 3 — Simulation depth: [`04-simulation.md`](./04-simulation.md)
+- Phase 4 — Kinh tế: [`05-economy.md`](./05-economy.md)
 - Backlog / chưa làm: [`99-backlog.md`](./99-backlog.md)
 
 ## Nguyên tắc chia việc
@@ -27,6 +28,7 @@ theo từng bước nhỏ, mỗi bước là một thay đổi độc lập có 
 | 1 | Xung đột `W` (pan vs build) | **Bỏ WASD pan**, giữ `Q/W/E/R/T` build, pan bằng mũi tên + edge scroll (`BUG-01a`, `BUG-01b`) |
 | 2 | Có cần lệnh Stop? | **Có** — nhưng hạ ưu tiên xuống cuối Phase 1, và làm rõ Stop = huỷ lệnh + đứng yên (`CTL-03`) |
 | 3 | Dân xây nhà + mang tài nguyên về? | **Có** — đưa kinh tế về chuẩn AoE (`CMD-05`, `SIM-02`) |
+| 4 | Farm là nguồn hay drop-off? | **Nguồn** — dân gặt ngay trên ruộng, ruộng cạn tự gieo lại bằng 60 gỗ (`ECO-01`) |
 
 ## Thứ tự phụ thuộc
 
@@ -69,6 +71,12 @@ flowchart TD
     S04[SIM-04 tests]
   end
 
+  subgraph P4["Phase 4 — Kinh tế"]
+    E01[ECO-01 farm as source]
+    E02[ECO-02 idle villager indicator]
+    E03[ECO-03 house constant]
+  end
+
   B01a --> B01b
   B01a --> C03
   B02 --> C02
@@ -81,6 +89,7 @@ flowchart TD
   D05 --> S02
   S01 --> S02
   D06 --> S02
+  S02 --> E01
 ```
 
 ## Trạng thái
@@ -113,6 +122,9 @@ flowchart TD
 | SIM-02 | 3 | L | DONE |
 | SIM-03 | 3 | M | DONE |
 | SIM-04 | 3 | M | DONE |
+| ECO-01 | 4 | L | DONE |
+| ECO-02 | 4 | S | DONE |
+| ECO-03 | 4 | S | DONE |
 
 Size: **S** < 2h, **M** ~ nửa ngày, **L** >= 1 ngày.
 
@@ -123,11 +135,12 @@ Size: **S** < 2h, **M** ~ nửa ngày, **L** >= 1 ngày.
 
 | Module | Dòng | Sở hữu |
 | --- | --- | --- |
-| `rooms/EconomySystem.ts` | 363 | harvest, mang hàng, drop-off, retarget (CMD-06, SIM-02) |
-| `rooms/CombatSystem.ts` | 260 | damage, `attackTimers`/`towerTimers`, aggro, kill/destroy (CMD-01, SIM-03) |
-| `rooms/CommandSystem.ts` | 662 | 11 handler `handle*`, validate payload, formation, refund (CMD-02..CMD-05, CTL-*) |
-| `rooms/MovementSystem.ts` | 210 | `setWalkTarget`, waypoint queue, `processPendingPaths`, blocked-grid cache (SIM-01, CTL-05) |
-| `rooms/WorldRoom.ts` | 1005 | tick loop, persistence/restore, spawn, population — phần thuộc về chính nó |
+| `rooms/EconomySystem.ts` | 588 | harvest, mang hàng, drop-off, retarget, farm (CMD-06, SIM-02, ECO-01) |
+| `rooms/gatherables.ts` | 30 | `gatheredType` + `seedGatheredBuilding`: loại tài nguyên một nhà cho gặt, và nạp đầy khi xong/restore (ECO-01) |
+| `rooms/CombatSystem.ts` | 385 | damage, `attackTimers`/`towerTimers`, aggro, kill/destroy (CMD-01, SIM-03) |
+| `rooms/CommandSystem.ts` | 689 | 11 handler `handle*`, validate payload, formation, refund (CMD-02..CMD-05, CTL-*) |
+| `rooms/MovementSystem.ts` | 271 | `setWalkTarget`, waypoint queue, `processPendingPaths`, blocked-grid cache (SIM-01, CTL-05) |
+| `rooms/WorldRoom.ts` | 1035 | tick loop, persistence/restore, spawn, population — phần thuộc về chính nó |
 
 `MovementSystem` không cần ports (chỉ sửa unit được truyền vào); room giữ các getter lazy
 `combat` / `commands` / `economy` / `movement` vì `this.state` chỉ tồn tại sau `onCreate()`.

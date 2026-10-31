@@ -173,7 +173,9 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
             </span>
           </div>
           <p className="text-[10px] text-slate-400 italic">
-            Chuột phải dân làng vào mỏ để tiến hành khai thác.
+            {entity.type === 'building'
+              ? 'Chuột phải dân làng vào ruộng để khai thác; ruộng cạn sẽ được gieo lại bằng gỗ.'
+              : 'Chuột phải dân làng vào mỏ để tiến hành khai thác.'}
           </p>
         </div>
       )}

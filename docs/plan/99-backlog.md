@@ -32,13 +32,18 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 
 ## Kinh tế
 
-- **Lumber Camp / Mining Camp / Mill** — chưa có trong `BUILDING_BLUEPRINTS`.
-- **Farm tự cạn và cần reseed** — hiện `FARM` không sinh food gì cả (chỉ tăng pop? không,
-  `populationProvided: 0`).
-- **Nhà ở (House) đúng chuẩn** — hiện `populationProvided: 5` nhưng `POPULATION_PER_HOUSE = 5`
-  chỉ là hằng số chết, không dùng.
-- **Idle villager indicator** ở góc HUD.
+- **Lumber Camp / Mining Camp / Mill** — chưa có trong `BUILDING_BLUEPRINTS`. Hạ tầng đã
+  sẵn (`BuildingBlueprint.dropOffs`), nhưng thiếu asset: 3 nhà này cần PNG mới theo cùng
+  bộ `scripts/generate_buildings_assets.py` (ComfyUI nội bộ) chứ không vẽ tay được cho
+  khớp 5 nhà còn lại.
 - **Resource queued gathering** (Shift khi click resource).
+- **Ruộng không lưu tiến độ** — `BuildingState.resourceAmount` chỉ nằm trong snapshot, chưa
+  vào bảng `Building` của SQLite (thêm cột = migration Prisma). Hệ quả: restart giữa chừng
+  thì ruộng đang gặt dở lại đầy 250 (`WorldRoom.initializeWorldPersistence` cố ý làm vậy để
+  không có ruộng chết vĩnh viễn).
+- **Gieo lại ruộng là tự động, không tắt được** — AoE2 có nút auto-reseed; hiện dân luôn
+  trả 60 gỗ khi ruộng cạn nếu đủ tiền. Muốn tắt phải thêm cờ trên `PlayerState`.
+- **Ruộng cạn chỉ đổi màu (tint)** — chưa có sprite `farm_fallow` riêng.
 
 ## UI / UX
 
@@ -59,7 +64,11 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 
 ## Kỹ thuật
 
-- **`WorldScene.ts` đã 902 dòng** (ngưỡng soi là ~1000): phần camera mới thêm (`zoomTo`,
+- **`WorldRoom.ts` đã 1035 dòng** — vượt ngưỡng soi ~1000. Phần restore/spawn (đọc `p.buildings`
+  / `p.units` rồi dựng `Schema`) là khối liền mạch dễ tách nhất thành
+  `rooms/worldBootstrap.ts`; đợt ECO-01 đã gỡ bớt phần trùng (nạp tài nguyên nguyên liệu
+  sang `gatherables.ts`) nhưng file vẫn còn trên ngưỡng.
+- **`WorldScene.ts` đã 968 dòng** (ngưỡng soi là ~1000): phần camera (`zoomTo`,
   `zoomBySteps`, `saveCameraBookmark`, `recallCameraBookmark`, `MiddleDragPan`) nên tách
   thành `input/CameraController.ts` trước khi thêm gì nữa vào scene.
 - **Client prediction** cho lệnh move (hiện chờ snapshot → cảm giác trễ ~50ms).

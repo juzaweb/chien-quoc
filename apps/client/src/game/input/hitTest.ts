@@ -1,4 +1,5 @@
 import type { Room } from '@colyseus/sdk';
+import { BUILDING_BLUEPRINTS, BuildingType } from '@chien-quoc/shared';
 import type * as Phaser from 'phaser';
 import type { GridPoint, WorldPoint } from './pointer.js';
 
@@ -107,6 +108,20 @@ export function findOwnFoundationAt(scene: HitTestScene, grid: GridPoint): strin
   if (!buildingId) return null;
   const building = scene.room?.state.buildings.get(buildingId);
   return building && !building.isConstructed ? buildingId : null;
+}
+
+/**
+ * ECO-01: id of one of the player's own finished buildings that can be gathered
+ * from (a farm), or null. Shares `findBuildingAt` so the right-click, the cursor
+ * and the panel all agree on which building a click lands on.
+ */
+export function findOwnGatherableAt(scene: HitTestScene, grid: GridPoint): string | null {
+  const buildingId = findBuildingAt(scene, grid, scene.mySessionId);
+  if (!buildingId) return null;
+  const building = scene.room?.state.buildings.get(buildingId);
+  if (!building || !building.isConstructed) return null;
+  const blueprint = BUILDING_BLUEPRINTS[building.type as BuildingType];
+  return blueprint?.gatheredResource ? buildingId : null;
 }
 
 /** Resource node under the pointer: sprite distance first, then exact grid cell. */

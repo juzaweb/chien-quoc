@@ -1,6 +1,6 @@
 import { BUILDING_BLUEPRINTS, screenToGrid } from '@chien-quoc/shared';
 import type { WorldScene } from '../scenes/WorldScene.js';
-import { findBuildingAt, findOwnFoundationAt, findResourceAt, findUnitAt } from './hitTest.js';
+import { findBuildingAt, findOwnFoundationAt, findOwnGatherableAt, findResourceAt, findUnitAt } from './hitTest.js';
 import type { WorldPoint } from './pointer.js';
 
 /**
@@ -76,6 +76,12 @@ export class CursorController {
     }
 
     if (this.scene.selection.isAllVillagers() && findResourceAt(this.scene, worldPoint, grid)) {
+      return 'harvest';
+    }
+
+    // ECO-01: an own finished farm is worked in place, so the same affordance
+    // applies without a resource node under the pointer.
+    if (this.scene.selection.isAllVillagers() && findOwnGatherableAt(this.scene, grid)) {
       return 'harvest';
     }
 

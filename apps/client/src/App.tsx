@@ -41,6 +41,8 @@ export const App: React.FC = () => {
   const [resources, setResources] = useState<Resources>(INITIAL_PLAYER_RESOURCES);
   const [population, setPopulation] = useState<number>(0);
   const [populationCap, setPopulationCap] = useState<number>(INITIAL_POPULATION_CAP);
+  /** ECO-02: idle villagers, published by the scene when the count changes. */
+  const [idleVillagers, setIdleVillagers] = useState<number>(0);
 
   // Selection & Placement
   const [selectedEntity, setSelectedEntity] = useState<SelectedEntityData | null>(null);
@@ -239,6 +241,7 @@ export const App: React.FC = () => {
           onSelectionChange={(entity) => setSelectedEntity(entity)}
           onPlacementCancelled={() => setActiveBuildingType(null)}
           onBuildingHotkey={handleSelectBuilding}
+          onIdleVillagersChange={setIdleVillagers}
           gameRef={gameRef}
           sceneRef={sceneRef}
         />
@@ -256,6 +259,8 @@ export const App: React.FC = () => {
           population={population}
           populationCap={populationCap}
           isConnected={isConnected}
+          idleVillagers={idleVillagers}
+          onSelectIdleVillager={() => sceneRef.current?.cycleToIdleUnit('villager')}
         />
       )}
 

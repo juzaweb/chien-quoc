@@ -116,7 +116,10 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     cost: { wood: 50, food: 0, gold: 0, stone: 0 },
     buildTimeMs: 5000,
     maxHp: 450,
-    populationProvided: 5,
+    // ECO-03: the house is the one building whose capacity is a shared constant,
+    // so the number the HUD promises and the number the blueprint grants cannot
+    // drift apart.
+    populationProvided: POPULATION_PER_HOUSE,
     trainableUnits: [],
     attackPower: 0,
     attackRange: 0,
@@ -138,7 +141,11 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     attackRange: 0,
     attackCooldownMs: 0,
     dropOffs: [],
-    description: 'Renewable source of food for your population and military.'
+    // ECO-01: a farm is a source, not a drop-off. Villagers harvest it in place,
+    // and a villager who empties it re-plants it for the farm's own cost.
+    gatheredResource: 'food',
+    gatherCapacity: 250,
+    description: 'Renewable source of food. Villagers harvest it in place and re-sow it when it runs dry.'
   },
   TOWER: {
     type: 'TOWER',

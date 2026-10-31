@@ -160,6 +160,9 @@ export class EntityRenderer {
     const img = scene.add.image(0, offsetY, textureKey);
     img.setScale(scale);
     container.add(img);
+    // ECO-01: kept so the gather state of a field can be drawn without
+    // rebuilding the container.
+    container.setData('buildingImage', img);
 
     // Health / Construction Bar
     const hpBar = scene.add.graphics();
@@ -189,6 +192,13 @@ export class EntityRenderer {
   updateBuildingBar(container: any, building: any) {
     const hpBar = container.getData('hpBar') as any;
     if (!hpBar) return;
+
+    // ECO-01: a field with nothing left in it turns brown, so an empty farm is
+    // readable at a glance instead of only through the detail panel.
+    const image = container.getData('buildingImage') as Phaser.GameObjects.Image | undefined;
+    if (image && building.resourceCapacity > 0) {
+      image.setTint(building.resourceAmount > 0 ? 0xffffff : 0x9a7b52);
+    }
 
     hpBar.clear();
 

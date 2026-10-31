@@ -62,6 +62,17 @@ export interface BuildingBlueprint {
    * drop-off at all, so a villager carrying wood walks past it.
    */
   dropOffs: ResourceType[];
+  /**
+   * ECO-01: resource a villager can gather straight from this building (a farm
+   * grows food, everything else just holds it). Unset means the building is not
+   * a gatherable target, so a right-click on it is not a harvest order.
+   */
+  gatheredResource?: ResourceType;
+  /**
+   * ECO-01: units of `gatheredResource` the building holds when it is finished.
+   * Re-planting a depleted farm costs the building's own `cost` again.
+   */
+  gatherCapacity?: number;
   description: string;
 }
 
@@ -125,9 +136,17 @@ export interface AttackTargetPayload {
   targetType: 'unit' | 'building';
 }
 
+/**
+ * CMD-06 / ECO-01: send villagers to a source of resources. A world node is
+ * addressed by `resourceNodeId`; a gatherable building (a farm) by
+ * `buildingId`. Exactly one of the two is set, and the server resolves it from
+ * authoritative state, so a client cannot address somebody else's farm.
+ */
 export interface HarvestResourcePayload {
   unitIds: string[];
-  resourceNodeId: string;
+  resourceNodeId?: string;
+  /** ECO-01: a farm of the player's own that still holds food. */
+  buildingId?: string;
 }
 
 /**

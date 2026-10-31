@@ -32,6 +32,7 @@ import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
 import { isWithinBuildRange, syncBuilders } from './construction.js';
+import { seedGatheredBuilding } from './gatherables.js';
 import { EconomySystem } from './EconomySystem.js';
 import { CombatSystem } from './CombatSystem.js';
 import { CommandSystem } from './CommandSystem.js';
@@ -247,6 +248,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
           building.maxHp = b.maxHp;
           building.isConstructed = b.isConstructed;
           building.constructionProgress = b.constructionProgress;
+
+          // ECO-01: restored as a finished building, so a field comes back full
+          // instead of permanently barren (see `seedGatheredBuilding`).
+          if (b.isConstructed) seedGatheredBuilding(building);
+
           this.state.buildings.set(b.id, building);
         }
 
@@ -769,6 +775,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
           building.constructionProgress = 100;
           building.isConstructed = true;
           building.hp = building.maxHp;
+          // ECO-01: a finished field starts full. A foundation holds nothing, so
+          // this is also what makes "farm still under construction" true on the
+          // server side of a harvest order.
+          seedGatheredBuilding(building);
           // The crew is done; every builder drops back to idle on its next tick
           // (see `processUnitBuilding`), and the roster must not outlive the site.
           building.builderUnitIds.clear();
