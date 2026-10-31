@@ -18,13 +18,17 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
 
 ## Combat
 
-- **Stance**: Aggressive / Defensive / Stand Ground / No Attack.
 - **Garrison** vào Town Center / Tower / Castle.
 - **Attack ground** (công thành / pháo).
-- **Focus fire indicator** — hiện mục tiêu đang bị đánh.
-- **Health bar chỉ hiện khi bị thương** (AoE2 mặc định tắt, bật khi damaged).
 - **Damage type** (melee vs pierce vs cavalry bonus) — hiện chỉ có `attackPower` phẳng.
+  Lưu ý: mô tả `SPEARMAN` trong `UNIT_BLUEPRINTS` đã hứa "excellent against cavalry"
+  nhưng chưa có bonus nào; sửa một trong hai (thêm bonus, hoặc bỏ câu đó).
 - **Nâng cấp (blacksmith, university)** — chưa có hệ thống upgrade.
+- **Thế trận chỉ đổi được bằng `D`** — chưa có nút trong panel chi tiết, và chưa có
+  chỉ báo trạng thái trên sprite (AoE2 vẽ shield nhỏ khi Stand Ground).
+- **CMB-02/CMB-03 chưa có test tự động** — thanh máu ẩn khi đầy máu và vòng focus-fire
+  là thuần render, chỉ kiểm được bằng mắt; muốn test thật cần harness hai account đứng
+  cạnh nhau (một account đánh account kia).
 
 ## Kinh tế
 

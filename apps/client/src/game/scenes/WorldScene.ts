@@ -18,6 +18,7 @@ import { SelectionController } from '../input/SelectionController.js';
 import type { BoxSelectFilter } from '../input/SelectionController.js';
 import { applyEdgeScroll, MiddleDragPan } from '../input/cameraInput.js';
 import { EntityRenderer } from '../render/EntityRenderer.js';
+import { FocusIndicator } from '../render/FocusIndicator.js';
 import { TerrainLayer } from '../render/TerrainLayer.js';
 
 /**
@@ -89,6 +90,11 @@ export interface SelectedEntityData {
    */
   carryingAmount?: number;
   carryingResourceType?: string;
+  /**
+   * CMB-01: AGGRESSIVE | DEFENSIVE | STAND_GROUND | NO_ATTACK. Units only; shown
+   * in the panel so the stance cycle is observable without opening a menu.
+   */
+  stance?: string;
 }
 
 /**
@@ -180,6 +186,8 @@ export class WorldScene extends Phaser.Scene {
   public commands!: CommandController;
   public entityRenderer!: EntityRenderer;
   public terrain!: TerrainLayer;
+  /** CMB-03: red marker on the enemy the selection is hitting. */
+  public focus!: FocusIndicator;
 
   constructor() {
     super('WorldScene');
@@ -278,6 +286,9 @@ export class WorldScene extends Phaser.Scene {
     // 4b. Waypoint + rally overlays (CTL-05 / CTL-06), under the selection box
     this.commands = new CommandController(this);
     this.commands.createOverlays();
+
+    // 4c. Focus-fire marker (CMB-03), under the drag box like every other overlay
+    this.focus = new FocusIndicator(this);
 
     // 5. Selection and cursor policy. Built after placement because the cursor
     // reads the placement validator.
@@ -754,7 +765,8 @@ export class WorldScene extends Phaser.Scene {
           maxHp: unit.maxHp,
           isOwner: unit.ownerId === this.mySessionId,
           carryingAmount: unit.carryingAmount,
-          carryingResourceType: unit.carryingResourceType
+          carryingResourceType: unit.carryingResourceType,
+          stance: unit.stance
         });
         return;
       }
@@ -874,6 +886,11 @@ export class WorldScene extends Phaser.Scene {
       }
     });
 
+    // CMB-03 after the lerp: the marker is drawn on the sprite's current screen
+    // position, so reading it before interpolation would leave the ring one
+    // frame behind a moving target.
+    this.focus.render();
+
     this.syncSelectedUnitDetails();
   }
 
@@ -893,7 +910,7 @@ export class WorldScene extends Phaser.Scene {
     const unit = this.room?.state.units.get(unitId);
     if (!unit) return;
 
-    const signature = `${unit.hp}|${unit.carryingAmount}|${unit.carryingResourceType}|${unit.actionState}`;
+    const signature = `${unit.hp}|${unit.carryingAmount}|${unit.carryingResourceType}|${unit.actionState}|${unit.stance}`;
     if (signature === this.lastUnitDetailSignature) return;
 
     this.lastUnitDetailSignature = signature;

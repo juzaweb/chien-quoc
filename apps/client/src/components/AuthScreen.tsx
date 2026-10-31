@@ -228,6 +228,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             (huỷ lệnh hiện tại)
           </div>
           <div>
+            <span className="text-amber-400 font-mono">D</span> đổi thế trận: Chủ động → Phòng thủ
+            → Cố thủ → Không đánh
+          </div>
+          <div>
             <span className="text-amber-400 font-mono">.</span> nhảy tới nông dân đang rảnh,{' '}
             <span className="text-amber-400 font-mono">Ctrl + .</span> nhảy tới lính đang rảnh,{' '}
             <span className="text-amber-400 font-mono">H</span> về Town Center

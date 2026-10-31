@@ -191,6 +191,11 @@ export class EntityRenderer {
     if (!hpBar) return;
 
     hpBar.clear();
+
+    // CMB-02: a finished, undamaged building shows nothing. The construction bar
+    // still has to draw, so the early exit only covers the built case.
+    if (building.isConstructed && building.hp >= building.maxHp) return;
+
     const width = Math.max(70, building.sizeX * 36);
     const height = 6;
 
@@ -351,6 +356,11 @@ export class EntityRenderer {
     if (!hpBar) return;
 
     hpBar.clear();
+
+    // CMB-02: AoE2 hides the bar until the unit is hurt. A full-health unit then
+    // reads as the sprite alone; the panel still reports exact numbers.
+    if (hp >= maxHp) return;
+
     const width = isCavalry ? 50 : 38;
     const height = 4;
     const barY = isCavalry ? -84 : -68;

@@ -16,9 +16,11 @@ import {
   PlaceBuildingPayload,
   Resources,
   SetRallyPointPayload,
+  SetStancePayload,
   StopUnitsPayload,
   TrainUnitPayload,
   UNIT_BLUEPRINTS,
+  UNIT_STANCES,
   UnitType,
   canTrainUnitsAt
 } from '@chien-quoc/shared';
@@ -539,6 +541,31 @@ export class CommandSystem {
       unit.queueTargetX.clear();
       unit.queueTargetY.clear();
       this.ports.clearHarvestOrder(unit.id);
+    });
+  }
+
+  /**
+   * CMB-01: sets the combat stance of every owned unit in the payload.
+   *
+   * The stance is checked against the shared cycle list before anything is
+   * written: the combat system only recognises those four values, so storing a
+   * typo would silently behave like aggressive. Units the client does not own
+   * are skipped rather than failing the whole command, like every other unit
+   * order here.
+   */
+  handleSetStance(client: Client, payload: SetStancePayload) {
+    if (!payload?.unitIds || payload.unitIds.length === 0) return;
+    if (payload.unitIds.length > MAX_SELECTION) {
+      this.ports.rejectCommand(client, 'Too many units in one command');
+      return;
+    }
+    if (!UNIT_STANCES.includes(payload.stance)) {
+      this.ports.rejectCommand(client, 'Unknown unit stance');
+      return;
+    }
+
+    this.collectOwnedUnits(client, payload.unitIds).forEach((unit) => {
+      unit.stance = payload.stance;
     });
   }
 

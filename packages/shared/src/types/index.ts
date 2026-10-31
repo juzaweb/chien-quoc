@@ -13,6 +13,18 @@ export type UnitType = 'VILLAGER' | 'SPEARMAN' | 'ARCHER' | 'CAVALRY';
 
 export type ResourceNodeType = 'TREE' | 'GOLD_MINE' | 'STONE_MINE' | 'BERRY_BUSH';
 
+/**
+ * CMB-01: how a unit reacts to enemies it was not explicitly ordered to fight.
+ *
+ * `AGGRESSIVE` picks a fight with anything inside its aggro radius and chases it
+ * to the ends of the map. `DEFENSIVE` does the same but gives up once the chase
+ * carries it too far from where the fight started. `STAND_GROUND` never leaves
+ * its tile and only strikes what walks into its weapon range. `NO_ATTACK` never
+ * engages on its own, though an explicit attack order still works — the player
+ * asked for it.
+ */
+export type UnitStance = 'AGGRESSIVE' | 'DEFENSIVE' | 'STAND_GROUND' | 'NO_ATTACK';
+
 export type UnitActionState =
   | 'IDLE'
   | 'MOVING'
@@ -177,6 +189,16 @@ export interface CancelBuildingPayload {
   buildingId: string;
 }
 
+/**
+ * CMB-01: sets the stance of every unit in the selection. The client sends the
+ * stance it wants rather than "cycle this one", so two players pressing the key
+ * at the same time cannot disagree about the result.
+ */
+export interface SetStancePayload {
+  unitIds: string[];
+  stance: UnitStance;
+}
+
 export enum NetworkMessage {
   PLACE_BUILDING = 'PLACE_BUILDING',
   MOVE_UNITS = 'MOVE_UNITS',
@@ -190,6 +212,7 @@ export enum NetworkMessage {
   HARVEST_RESOURCE = 'HARVEST_RESOURCE',
   STOP_UNITS = 'STOP_UNITS',
   SET_RALLY_POINT = 'SET_RALLY_POINT',
+  SET_STANCE = 'SET_STANCE',
   ERROR_NOTIFICATION = 'ERROR_NOTIFICATION',
   SYSTEM_ANNOUNCEMENT = 'SYSTEM_ANNOUNCEMENT'
 }

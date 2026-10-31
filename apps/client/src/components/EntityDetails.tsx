@@ -17,6 +17,18 @@ const RESOURCE_LABELS: Record<string, string> = {
   stone: 'Đá'
 };
 
+/**
+ * CMB-01: stance labels, in the same order the `D` key cycles them. The colours
+ * run from green (fights anything) to grey (never engages), so the panel reads at
+ * a glance without parsing the word.
+ */
+const STANCE_LABELS: Record<string, { label: string; className: string }> = {
+  AGGRESSIVE: { label: 'Chủ động', className: 'text-emerald-300' },
+  DEFENSIVE: { label: 'Phòng thủ', className: 'text-sky-300' },
+  STAND_GROUND: { label: 'Cố thủ', className: 'text-amber-300' },
+  NO_ATTACK: { label: 'Không đánh', className: 'text-slate-400' }
+};
+
 interface EntityDetailsProps {
   entity: SelectedEntityData | null;
   playerResources: Resources;
@@ -117,6 +129,25 @@ export const EntityDetails: React.FC<EntityDetailsProps> = ({
               style={{ width: `${Math.max(0, Math.min(100, (entity.hp / entity.maxHp) * 100))}%` }}
             />
           </div>
+        </div>
+      )}
+
+      {/* CMB-01: combat stance + the key that cycles it */}
+      {entity.type === 'unit' && entity.stance && (
+        <div className="flex items-center justify-between text-[11px]" data-stance>
+          <span className="flex items-center gap-1 text-slate-300">
+            <Shield size={12} className="text-sky-400" /> Thế trận
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span
+              className={`font-mono font-bold ${
+                STANCE_LABELS[entity.stance]?.className ?? 'text-slate-300'
+              }`}
+            >
+              {STANCE_LABELS[entity.stance]?.label ?? entity.stance}
+            </span>
+            <span className="text-[10px] text-slate-500 font-mono">(D)</span>
+          </span>
         </div>
       )}
 

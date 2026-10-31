@@ -4,7 +4,8 @@ import {
   MAP_GRID_WIDTH,
   NetworkMessage,
   canTrainUnitsAt,
-  gridToScreen
+  gridToScreen,
+  nextUnitStance
 } from '@chien-quoc/shared';
 import * as Phaser from 'phaser';
 import type { WorldScene } from '../scenes/WorldScene.js';
@@ -122,6 +123,7 @@ export class CommandController {
     this.bindHomeKey(keyboard);
     this.bindCancelKey(keyboard);
     this.bindOrderKeys(keyboard);
+    this.bindStanceKey(keyboard);
     this.bindBuildingKeys(keyboard);
     this.bindZoomKeys(keyboard);
     this.bindCameraBookmarkKeys(keyboard);
@@ -405,6 +407,49 @@ export class CommandController {
   // ---------------------------------------------------------------------------
   // Unit commands
   // ---------------------------------------------------------------------------
+
+  /**
+   * CMB-01: `D` cycles the stance of the whole selection.
+   *
+   * The cycle is derived from the first selected unit, so pressing the key twice
+   * on a mixed group pulls everyone forward one step together instead of each
+   * unit advancing from its own current stance. Modifiers, placement mode and an
+   * empty selection are ignored: there is nothing to command in any of them.
+   */
+  private bindStanceKey(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
+    keyboard.on(
+      'keydown-D',
+      guardKey((event: KeyboardEvent) => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false;
+        if (this.scene.buildingToPlace) return false;
+        if (this.scene.selectedUnitIds.size === 0) return false;
+
+        event.preventDefault();
+        this.cycleSelectedStance();
+        return true;
+      })
+    );
+  }
+
+  /**
+   * Sends the next stance in the cycle for the current selection.
+   *
+   * The stance is read from the snapshot, not from local state: the server is
+   * authoritative, and a client that tracked its own copy would drift whenever a
+   * command was refused.
+   */
+  cycleSelectedStance() {
+    const scene = this.scene;
+    if (!scene.room || scene.selectedUnitIds.size === 0) return;
+
+    const firstId = scene.selectedUnitIds.values().next().value;
+    const current = firstId ? scene.room.state.units.get(firstId)?.stance : '';
+    const stance = nextUnitStance(current ?? '');
+    scene.room.send(NetworkMessage.SET_STANCE, {
+      unitIds: Array.from(scene.selectedUnitIds),
+      stance
+    });
+  }
 
   /**
    * Halts the selection in place. The server is authoritative; this only sends

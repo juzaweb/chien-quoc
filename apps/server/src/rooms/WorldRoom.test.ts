@@ -757,3 +757,195 @@ describe('combat cooldown bookkeeping', () => {
     expect(combat.towerTimers.has(tower.id)).toBe(false);
   });
 });
+
+describe('unit stance (CMB-01)', () => {
+  it('sets the stance on owned units and leaves a foreign unit alone', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    addPlayer(room, 'player-b');
+    const mine = addUnit(room, { id: 'u_1', ownerId: 'player-a' });
+    const theirs = addUnit(room, { id: 'u_2', ownerId: 'player-b' });
+    const client = createClient('player-a');
+
+    internals(room).commands.handleSetStance(client, {
+      unitIds: [mine.id, theirs.id],
+      stance: 'STAND_GROUND'
+    });
+
+    expect(mine.stance).toBe('STAND_GROUND');
+    expect(theirs.stance).toBe('AGGRESSIVE');
+  });
+
+  it('rejects an unknown stance without writing it', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    const unit = addUnit(room, { id: 'u_1', ownerId: 'player-a' });
+    const client = createClient('player-a');
+
+    internals(room).commands.handleSetStance(client, {
+      unitIds: [unit.id],
+      stance: 'BERSERK'
+    });
+
+    expect(unit.stance).toBe('AGGRESSIVE');
+    expect(client.send).toHaveBeenCalledWith(NetworkMessage.ERROR_NOTIFICATION, expect.anything());
+  });
+
+  it('NO_ATTACK never picks its own fight', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    addPlayer(room, 'player-b');
+    const unit = addUnit(room, {
+      id: 'u_1',
+      ownerId: 'player-a',
+      type: 'SPEARMAN',
+      x: 10,
+      y: 10,
+      actionState: 'ATTACK_MOVE'
+    });
+    unit.stance = 'NO_ATTACK';
+    // Walk somewhere, so the unit cannot arrive this tick and drop to IDLE.
+    unit.targetX = 30;
+    unit.targetY = 10;
+    addUnit(room, { id: 'u_2', ownerId: 'player-b', type: 'VILLAGER', x: 12, y: 10 });
+
+    internals(room).update(50);
+
+    expect(unit.actionState).toBe('ATTACK_MOVE');
+    expect(unit.targetEntityId).toBe('');
+  });
+
+  it('STAND_GROUND drops a target out of reach and does not take a step', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    addPlayer(room, 'player-b');
+    const unit = addUnit(room, {
+      id: 'u_1',
+      ownerId: 'player-a',
+      type: 'SPEARMAN',
+      x: 10,
+      y: 10,
+      actionState: 'ATTACKING'
+    });
+    unit.stance = 'STAND_GROUND';
+    const enemy = addUnit(room, { id: 'u_2', ownerId: 'player-b', type: 'VILLAGER', x: 20, y: 10 });
+    unit.targetEntityId = enemy.id;
+    unit.targetEntityType = 'unit';
+
+    internals(room).update(100);
+
+    expect(unit.actionState).toBe('IDLE');
+    expect(unit.x).toBe(10);
+    expect(enemy.hp).toBe(UNIT_BLUEPRINTS.VILLAGER.maxHp);
+  });
+
+  it('STAND_GROUND still strikes a target already inside its range', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    addPlayer(room, 'player-b');
+    const unit = addUnit(room, {
+      id: 'u_1',
+      ownerId: 'player-a',
+      type: 'SPEARMAN',
+      x: 10,
+      y: 10,
+      actionState: 'ATTACKING'
+    });
+    unit.stance = 'STAND_GROUND';
+    const enemy = addUnit(room, { id: 'u_2', ownerId: 'player-b', type: 'VILLAGER', x: 11, y: 10 });
+    unit.targetEntityId = enemy.id;
+    unit.targetEntityType = 'unit';
+
+    internals(room).update(100);
+
+    expect(enemy.hp).toBe(UNIT_BLUEPRINTS.VILLAGER.maxHp - UNIT_BLUEPRINTS.SPEARMAN.attackPower);
+    // It hit without walking: the stance holds the ground it stands on.
+    expect(unit.x).toBe(10);
+    expect(unit.actionState).toBe('ATTACKING');
+  });
+
+  it('NO_ATTACK gives up a fight it picked itself', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    addPlayer(room, 'player-b');
+    // Auto-acquired: `previousActionState` still holds the attack-move that was
+    // interrupted, which is the only marker that distinguishes it from a click.
+    const unit = addUnit(room, {
+      id: 'u_1',
+      ownerId: 'player-a',
+      type: 'SPEARMAN',
+      x: 10,
+      y: 10,
+      actionState: 'ATTACKING'
+    });
+    unit.previousActionState = 'ATTACK_MOVE';
+    unit.targetX = 40;
+    unit.targetY = 10;
+    unit.stance = 'NO_ATTACK';
+    const enemy = addUnit(room, { id: 'u_2', ownerId: 'player-b', type: 'VILLAGER', x: 11, y: 10 });
+    unit.targetEntityId = enemy.id;
+    unit.targetEntityType = 'unit';
+
+    internals(room).update(100);
+
+    expect(unit.actionState).toBe('ATTACK_MOVE');
+    expect(unit.targetEntityId).toBe('');
+    expect(enemy.hp).toBe(UNIT_BLUEPRINTS.VILLAGER.maxHp);
+  });
+
+  it('NO_ATTACK still fights a target the player clicked', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    addPlayer(room, 'player-b');
+    // An explicit attack order clears `previousActionState`, so the stance must
+    // not touch it — the player asked for this fight by hand.
+    const unit = addUnit(room, {
+      id: 'u_1',
+      ownerId: 'player-a',
+      type: 'SPEARMAN',
+      x: 10,
+      y: 10,
+      actionState: 'ATTACKING'
+    });
+    unit.stance = 'NO_ATTACK';
+    const enemy = addUnit(room, { id: 'u_2', ownerId: 'player-b', type: 'VILLAGER', x: 11, y: 10 });
+    unit.targetEntityId = enemy.id;
+    unit.targetEntityType = 'unit';
+
+    internals(room).update(100);
+
+    expect(enemy.hp).toBe(UNIT_BLUEPRINTS.VILLAGER.maxHp - UNIT_BLUEPRINTS.SPEARMAN.attackPower);
+    expect(unit.actionState).toBe('ATTACKING');
+  });
+
+  it('DEFENSIVE gives up once the chase passes its leash', () => {
+    const room = createRoom();
+    addPlayer(room, 'player-a');
+    addPlayer(room, 'player-b');
+    const unit = addUnit(room, {
+      id: 'u_1',
+      ownerId: 'player-a',
+      type: 'SPEARMAN',
+      x: 10,
+      y: 10,
+      actionState: 'ATTACK_MOVE'
+    });
+    unit.stance = 'DEFENSIVE';
+    unit.targetX = 40;
+    unit.targetY = 10;
+    const enemy = addUnit(room, { id: 'u_2', ownerId: 'player-b', type: 'VILLAGER', x: 15, y: 10 });
+
+    // Tick 1: it picks the fight itself, which is what records the leash anchor.
+    internals(room).update(100);
+    expect(unit.actionState).toBe('ATTACKING');
+
+    // The target runs: a defensive unit follows only four tiles from its post.
+    enemy.x = 60;
+    for (let i = 0; i < 200 && unit.actionState === 'ATTACKING'; i++) {
+      internals(room).update(100);
+    }
+
+    expect(unit.actionState).toBe('ATTACK_MOVE');
+    expect(Math.hypot(unit.x - 10, unit.y - 10)).toBeLessThan(5);
+  });
+});

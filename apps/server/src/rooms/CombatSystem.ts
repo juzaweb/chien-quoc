@@ -1,6 +1,7 @@
 import {
   BuildingBlueprint,
   UNIT_BLUEPRINTS,
+  UnitBlueprint,
   UnitType
 } from '@chien-quoc/shared';
 import { BuildingState } from '../schema/BuildingState.js';
@@ -25,6 +26,14 @@ export interface CombatPorts {
 }
 
 /**
+ * CMB-01: how far a `DEFENSIVE` unit may chase an auto-acquired target from the
+ * spot where the fight started, in tiles. AoE2's defensive stance is "hold this
+ * ground", so the unit walks back to its post instead of following a scout
+ * across the map.
+ */
+const DEFENSIVE_LEASH_TILES = 4;
+
+/**
  * Melee combat for units and ranged fire for defensive buildings (CMD-01,
  * SIM-03).
  *
@@ -47,6 +56,12 @@ export class CombatSystem {
    * by {@link updateUnitCombat}.
    */
   private readonly towerTimers: Map<string, number> = new Map();
+  /**
+   * CMB-01: where a `DEFENSIVE` unit stood when it picked a fight on its own.
+   * Only auto-acquired fights are leashed — a target the player clicked is a
+   * direct order and is pursued anywhere, like AoE2.
+   */
+  private readonly engageAnchors: Map<string, { x: number; y: number }> = new Map();
 
   constructor(
     private readonly state: WorldState,
@@ -62,6 +77,9 @@ export class CombatSystem {
   acquireAggroTarget(unit: UnitState, aggroRadius: number) {
     if (unit.actionState !== 'ATTACK_MOVE' && unit.actionState !== 'PATROL') return;
     if (aggroRadius <= 0) return;
+    // CMB-01: only the two engaging stances pick their own fights. A stand-ground
+    // or no-attack unit waits to be told.
+    if (unit.stance === 'STAND_GROUND' || unit.stance === 'NO_ATTACK') return;
 
     const enemy = this.nearestEnemyOf(unit.ownerId, aggroRadius, (other) =>
       Math.hypot(other.x - unit.x, other.y - unit.y)
@@ -72,6 +90,38 @@ export class CombatSystem {
     unit.actionState = 'ATTACKING';
     unit.targetEntityId = enemy.id;
     unit.targetEntityType = 'unit';
+    // The leash measures from here, not from the unit's destination: a defensive
+    // unit pushed by a patrol has already left its post by the time it engages.
+    if (unit.stance === 'DEFENSIVE') {
+      this.engageAnchors.set(unit.id, { x: unit.x, y: unit.y });
+    }
+  }
+
+  /**
+   * CMB-01: whether this fight was picked by the unit itself instead of ordered.
+   *
+   * Every explicit order in the command layer clears `previousActionState`, and
+   * only {@link acquireAggroTarget} fills it back in, so a non-empty value here
+   * is exactly "auto-acquired".
+   */
+  private isAutoAcquired(unit: UnitState): boolean {
+    return unit.previousActionState === 'ATTACK_MOVE' || unit.previousActionState === 'PATROL';
+  }
+
+  /**
+   * CMB-01: whether the unit may keep moving towards its attack target this
+   * tick.
+   *
+   * `STAND_GROUND` never steps — that is the whole stance, and it holds even for
+   * an enemy the player clicked, which is why an out-of-reach order is dropped
+   * instead of walked. `DEFENSIVE` steps freely on an explicit order but stops
+   * once chasing a fight of its own carries it past the leash.
+   */
+  canChaseTarget(unit: UnitState): boolean {
+    if (unit.stance === 'STAND_GROUND') return false;
+    const anchor = this.engageAnchors.get(unit.id);
+    if (unit.stance !== 'DEFENSIVE' || !anchor) return true;
+    return Math.hypot(unit.x - anchor.x, unit.y - anchor.y) < DEFENSIVE_LEASH_TILES;
   }
 
   /**
@@ -97,6 +147,9 @@ export class CombatSystem {
   endAttackOrder(unit: UnitState) {
     const resume = unit.previousActionState;
     unit.previousActionState = '';
+    // The leash only spans one engagement; a stale anchor would make the next
+    // fight start already out of bounds.
+    this.engageAnchors.delete(unit.id);
 
     if (resume === 'ATTACK_MOVE' || resume === 'PATROL') {
       unit.targetEntityId = '';
@@ -108,10 +161,82 @@ export class CombatSystem {
     this.ports.resumeQueuedWaypoint(unit);
   }
 
+  /**
+   * CMB-01 stance gate for an active attack.
+   *
+   * `NO_ATTACK` drops a fight the unit picked itself — the stance exists to stop
+   * exactly that — while an explicit attack order is still honoured, since the
+   * player asked for it. `STAND_GROUND` keeps the fight only while the target is
+   * already inside its weapon range. `DEFENSIVE` keeps it until the chase runs
+   * past its leash. Both end the order rather than leaving the unit `ATTACKING` a
+   * target it will never touch, which would otherwise park it forever.
+   */
+  private keepsTarget(unit: UnitState, blueprint: UnitBlueprint): boolean {
+    if (unit.stance === 'NO_ATTACK' && this.isAutoAcquired(unit)) {
+      this.endAttackOrder(unit);
+      return false;
+    }
+
+    if (unit.stance === 'STAND_GROUND') {
+      if (this.isTargetInWeaponRange(unit, blueprint)) return true;
+      this.endAttackOrder(unit);
+      return false;
+    }
+
+    if (unit.stance === 'DEFENSIVE' && !this.canChaseTarget(unit)) {
+      this.endAttackOrder(unit);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Distance in tiles from the unit to its current target, or null when the
+   * target is gone. A building is measured to the centre of its footprint, which
+   * is how every other range check in this file measures it.
+   */
+  private distanceToTarget(unit: UnitState): number | null {
+    if (unit.targetEntityType === 'unit') {
+      const target = this.state.units.get(unit.targetEntityId);
+      if (!target) return null;
+      return Math.hypot(target.x - unit.x, target.y - unit.y);
+    }
+
+    if (unit.targetEntityType === 'building') {
+      const target = this.state.buildings.get(unit.targetEntityId);
+      if (!target) return null;
+      const centerX = target.gridX + target.sizeX / 2;
+      const centerY = target.gridY + target.sizeY / 2;
+      return Math.hypot(centerX - unit.x, centerY - unit.y);
+    }
+
+    return null;
+  }
+
+  /**
+   * Weapon range against the current target type. A unit is hit from half a tile
+   * around its centre, a building from one and a half around its footprint, so
+   * the reach feels the same against a 1x1 tower and a 4x4 town centre.
+   */
+  private attackRangeAgainstTarget(unit: UnitState, blueprint: UnitBlueprint): number {
+    return blueprint.attackRange + (unit.targetEntityType === 'building' ? 1.5 : 0.5);
+  }
+
+  /** Whether the target sits inside weapon range right now. */
+  private isTargetInWeaponRange(unit: UnitState, blueprint: UnitBlueprint): boolean {
+    const dist = this.distanceToTarget(unit);
+    return dist !== null && dist <= this.attackRangeAgainstTarget(unit, blueprint);
+  }
+
   /** Per-tick work for a unit that is chasing or striking its target. */
   updateUnitCombat(unit: UnitState, deltaTime: number) {
     const blueprint = UNIT_BLUEPRINTS[unit.type as UnitType];
     if (!blueprint) return;
+
+    // CMB-01 before the cooldown: a stance that has given up should not keep a
+    // weapon timer parked against a target it is no longer fighting.
+    if (!this.keepsTarget(unit, blueprint)) return;
 
     const remainingCooldown = (this.attackTimers.get(unit.id) ?? 0) - deltaTime;
 
@@ -128,8 +253,7 @@ export class CombatSystem {
         return;
       }
 
-      const dist = Math.hypot(targetUnit.x - unit.x, targetUnit.y - unit.y);
-      if (dist > blueprint.attackRange + 0.5) return;
+      if (!this.isTargetInWeaponRange(unit, blueprint)) return;
 
       targetUnit.hp -= blueprint.attackPower;
       this.attackTimers.set(unit.id, blueprint.attackCooldownMs);
@@ -152,10 +276,7 @@ export class CombatSystem {
         return;
       }
 
-      const centerX = targetBuilding.gridX + targetBuilding.sizeX / 2;
-      const centerY = targetBuilding.gridY + targetBuilding.sizeY / 2;
-      const dist = Math.hypot(centerX - unit.x, centerY - unit.y);
-      if (dist > blueprint.attackRange + 1.5) return;
+      if (!this.isTargetInWeaponRange(unit, blueprint)) return;
 
       targetBuilding.hp -= blueprint.attackPower;
       this.attackTimers.set(unit.id, blueprint.attackCooldownMs);
@@ -206,6 +327,7 @@ export class CombatSystem {
    */
   forgetUnit(unitId: string) {
     this.attackTimers.delete(unitId);
+    this.engageAnchors.delete(unitId);
   }
 
   /** Drops the cooldown of a building that was destroyed or cancelled. */

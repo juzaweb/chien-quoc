@@ -18,6 +18,7 @@ import {
   HarvestResourcePayload,
   StopUnitsPayload,
   SetRallyPointPayload,
+  SetStancePayload,
   CancelTrainPayload,
   CancelBuildingPayload,
   SERVER_TICK_RATE,
@@ -172,6 +173,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     this.onMessage(NetworkMessage.SET_RALLY_POINT, (client, message: SetRallyPointPayload) => {
       this.commands.handleSetRallyPoint(client, message);
+    });
+
+    this.onMessage(NetworkMessage.SET_STANCE, (client, message: SetStancePayload) => {
+      this.commands.handleSetStance(client, message);
     });
 
     this.onMessage(NetworkMessage.CANCEL_TRAIN, (client, message: CancelTrainPayload) => {
@@ -848,6 +853,15 @@ export class WorldRoom extends Room<{ state: WorldState }> {
           }
           destinationX = targetX;
           destinationY = targetY;
+
+          // CMB-01: a stand-ground unit, or a defensive one that has been dragged
+          // past its leash, does not take the step. Zeroing the destination keeps
+          // the movement branch below untouched: dist is 0, so nothing moves,
+          // while `updateUnitCombat` still lands hits on anything already in range.
+          if (!this.combat.canChaseTarget(unit)) {
+            destinationX = unit.x;
+            destinationY = unit.y;
+          }
         }
 
         // SIM-01: follow the computed route while it lasts. A route ends on the

@@ -1,4 +1,11 @@
-import { BuildingBlueprint, BuildingType, Resources, UnitBlueprint, UnitType } from '../types/index.js';
+import {
+  BuildingBlueprint,
+  BuildingType,
+  Resources,
+  UnitBlueprint,
+  UnitStance,
+  UnitType
+} from '../types/index.js';
 
 export const TILE_WIDTH = 128;
 export const TILE_HEIGHT = 64;
@@ -42,6 +49,31 @@ export const INITIAL_PLAYER_RESOURCES: Resources = {
 export const INITIAL_POPULATION_CAP = 10;
 export const POPULATION_PER_HOUSE = 5;
 export const MAX_POPULATION_LIMIT = 200;
+
+/**
+ * CMB-01: cycle order for the stance hotkey, from most to least aggressive.
+ *
+ * Shared so the client's cycling and the server's validation agree on what a
+ * legal stance is: a stance not in this list is rejected instead of being
+ * silently stored and then ignored by the combat system.
+ */
+export const UNIT_STANCES: readonly UnitStance[] = [
+  'AGGRESSIVE',
+  'DEFENSIVE',
+  'STAND_GROUND',
+  'NO_ATTACK'
+];
+
+/**
+ * Next stance in the cycle. An unknown current value (a snapshot from an older
+ * server, an empty field) restarts the cycle at `AGGRESSIVE` rather than
+ * returning `undefined`.
+ */
+export function nextUnitStance(current: string): UnitStance {
+  const index = UNIT_STANCES.indexOf(current as UnitStance);
+  if (index === -1) return UNIT_STANCES[0];
+  return UNIT_STANCES[(index + 1) % UNIT_STANCES.length];
+}
 
 export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
   TOWN_CENTER: {

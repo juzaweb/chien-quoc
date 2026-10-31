@@ -12,6 +12,10 @@ export class UnitState extends Schema {
   @type('number') hp: number = 50;
   @type('number') maxHp: number = 50;
   @type('string') actionState: string = 'IDLE'; // IDLE, MOVING, ATTACKING, HARVESTING, ATTACK_MOVE, PATROL, BUILDING
+  // CMB-01: AGGRESSIVE | DEFENSIVE | STAND_GROUND | NO_ATTACK. Defaults to the
+  // AoE2 default and is deliberately not persisted: a restart returns every unit
+  // to aggressive, which the player can correct with one key press.
+  @type('string') stance: string = 'AGGRESSIVE';
   @type('string') targetEntityId: string = '';
   @type('string') targetEntityType: string = ''; // 'unit' | 'building' | 'resource'
   @type('string') carryingResourceType: string = '';
