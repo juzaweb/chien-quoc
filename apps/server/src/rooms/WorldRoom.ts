@@ -37,6 +37,7 @@ import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
 import { getBuildApproachPoint, isWithinBuildRange, syncBuilders } from './construction.js';
+import { distanceToFootprint } from './geometry.js';
 
 const PLAYER_COLORS = [
   '#3b82f6', // Blue
@@ -110,6 +111,12 @@ interface WorldRoomAuth {
 export class WorldRoom extends Room<{ state: WorldState }> {
   private nextEntityId: number = 1000;
   private attackTimers: Map<string, number> = new Map();
+  /**
+   * SIM-03: remaining cooldown per defensive building, keyed by building id.
+   * Separate from `attackTimers` because that map is keyed by unit id and only
+   * touched by `processUnitCombat`.
+   */
+  private towerTimers: Map<string, number> = new Map();
   private harvestTimers: Map<string, number> = new Map();
   /**
    * Last resource type a villager was ordered to gather, keyed by unit id.
@@ -1087,6 +1094,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     // Units walking to or attacking the foundation resolve the missing target
     // on their next tick, so nothing has to be repointed here.
     this.state.buildings.delete(building.id);
+    this.towerTimers.delete(building.id);
   }
 
   /**
@@ -1440,6 +1448,15 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         }
       }
 
+      // SIM-03: a finished defensive building shoots at whatever enemy comes
+      // inside its range. Foundations are defenceless until they are done.
+      if (building.isConstructed) {
+        const attackBlueprint = BUILDING_BLUEPRINTS[building.type as BuildingType];
+        if (attackBlueprint && attackBlueprint.attackRange > 0) {
+          this.processTowerCombat(building, deltaTime, attackBlueprint);
+        }
+      }
+
       // Process training queue
       if (building.isConstructed && building.trainingQueue.length > 0) {
         building.trainingProgressMs += deltaTime;
@@ -1652,6 +1669,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
             if (targetBuilding.hp <= 0) {
               const bOwner = targetBuilding.ownerId;
               this.state.buildings.delete(targetBuilding.id);
+              this.towerTimers.delete(targetBuilding.id);
               this.updatePlayerPopulation(bOwner);
               this.endAttackOrder(unit);
             }
@@ -1664,6 +1682,65 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     } else {
       this.attackTimers.set(timerKey, remainingCooldown);
     }
+  }
+
+  /**
+   * SIM-03: fires a defensive building's shot at the closest enemy unit in range.
+   *
+   * The cooldown counts down every tick and is only reset when a shot actually
+   * lands, so a tower that had nothing to shoot fires the moment a target walks
+   * in instead of waiting out a timer it never used.
+   */
+  private processTowerCombat(
+    building: BuildingState,
+    deltaTime: number,
+    blueprint: BuildingBlueprint
+  ) {
+    let remainingCooldown = (this.towerTimers.get(building.id) ?? 0) - deltaTime;
+
+    if (remainingCooldown > 0) {
+      this.towerTimers.set(building.id, remainingCooldown);
+      return;
+    }
+
+    const target = this.findNearestEnemyUnitInRange(building, blueprint.attackRange);
+    if (!target) {
+      // Ready, but nothing in range: stay at zero so the next arrival is shot
+      // immediately rather than after a fresh cooldown.
+      this.towerTimers.set(building.id, 0);
+      return;
+    }
+
+    target.hp -= blueprint.attackPower;
+    this.towerTimers.set(building.id, blueprint.attackCooldownMs);
+
+    if (target.hp <= 0) {
+      const victimOwner = target.ownerId;
+      this.state.units.delete(target.id);
+      // Transient harvest state must not outlive the unit.
+      this.harvestTypeByUnit.delete(target.id);
+      this.updatePlayerPopulation(victimOwner);
+    }
+  }
+
+  /**
+   * Closest enemy unit inside a building's range, measured from the footprint
+   * edge so `attackRange` means the same thing for every footprint size.
+   */
+  private findNearestEnemyUnitInRange(building: BuildingState, range: number): UnitState | null {
+    let nearest: UnitState | null = null;
+    let nearestDist = range;
+
+    this.state.units.forEach((other: UnitState) => {
+      if (other.ownerId === building.ownerId) return;
+      const dist = distanceToFootprint(other.x, other.y, building);
+      if (dist <= nearestDist) {
+        nearest = other;
+        nearestDist = dist;
+      }
+    });
+
+    return nearest;
   }
 
   /**

@@ -111,7 +111,7 @@ flowchart TD
 | CMD-06 | 2 | S | DONE |
 | SIM-01 | 3 | L | TODO |
 | SIM-02 | 3 | L | TODO |
-| SIM-03 | 3 | M | TODO |
+| SIM-03 | 3 | M | DONE |
 | SIM-04 | 3 | M | TODO |
 
 Size: **S** < 2h, **M** ~ nửa ngày, **L** >= 1 ngày.

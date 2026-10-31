@@ -66,9 +66,22 @@ nhưng **chưa được dùng ở đâu**.
 
 ---
 
-## SIM-03 — Tower tấn công
+## SIM-03 — Tower tấn công — DONE
 
-**Vấn đề:** `BUILDING_BLUEPRINTS.TOWER.description` nói "fires arrows at approaching enemy
+**Trạng thái:** xong. `BuildingBlueprint` có `attackPower` / `attackRange` /
+`attackCooldownMs` (0 với mọi building trừ TOWER: 10 dmg, 8 tile, 2s). `update()` gọi
+`processTowerCombat()` cho building đã xong có `attackRange > 0`; timer riêng
+`towerTimers` (xoá cùng lúc xoá building). Tầm đo từ **mép footprint** qua helper dùng
+chung `rooms/geometry.ts::distanceToFootprint` (construction và tower cùng một định nghĩa).
+Cooldown chỉ reset khi bắn trúng đích, nên tower rảnh sẽ bắn ngay khi có địch bước vào.
+Đo thật: 2 account, tower dựng bằng 3 dân, dân địch 50hp mất 10hp mỗi phát và chết sau
+~10s; dân cùng chủ đứng sát tower không mất máu; unit ngoài tầm không bị bắn; móng chưa
+xong không bắn.
+**Còn lại (backlog):** client chưa vẽ projectile/mũi tên — hiện chỉ thấy thanh máu tụt.
+
+---
+
+**Vấn đề gốc:** `BUILDING_BLUEPRINTS.TOWER.description` nói "fires arrows at approaching enemy
 forces", nhưng `update()` **không** xử lý building combat. Tower chỉ là vật trang trí.
 
 **Hành vi tối thiểu:**

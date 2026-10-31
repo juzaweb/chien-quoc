@@ -2,6 +2,7 @@ import { MAP_GRID_HEIGHT, MAP_GRID_WIDTH, UNIT_BLUEPRINTS, UnitType } from '@chi
 import type { MapSchema } from '@colyseus/schema';
 import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
+import { distanceToFootprint } from './geometry.js';
 
 /**
  * CMD-05: how far from a foundation's footprint edge a villager can stand and
@@ -21,16 +22,9 @@ const BUILD_RANGE = 1.5;
  */
 const BUILD_APPROACH_DISTANCE = 0.5;
 
-/** Distance from a unit to a building's footprint, in tiles; `0` when inside. */
-function distanceToFootprint(unit: UnitState, building: BuildingState): number {
-  const dx = Math.max(building.gridX - unit.x, 0, unit.x - (building.gridX + building.sizeX));
-  const dy = Math.max(building.gridY - unit.y, 0, unit.y - (building.gridY + building.sizeY));
-  return Math.hypot(dx, dy);
-}
-
 /** Whether a unit is close enough to the footprint to count as a builder. */
 export function isWithinBuildRange(unit: UnitState, building: BuildingState): boolean {
-  return distanceToFootprint(unit, building) <= BUILD_RANGE;
+  return distanceToFootprint(unit.x, unit.y, building) <= BUILD_RANGE;
 }
 
 /**

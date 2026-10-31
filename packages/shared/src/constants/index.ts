@@ -54,6 +54,9 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     maxHp: 2400,
     populationProvided: 15,
     trainableUnits: ['VILLAGER'],
+    attackPower: 0,
+    attackRange: 0,
+    attackCooldownMs: 0,
     description: 'The heart of your settlement. Trains villagers and provides core population.'
   },
   BARRACKS: {
@@ -66,6 +69,9 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     maxHp: 1200,
     populationProvided: 0,
     trainableUnits: ['SPEARMAN', 'ARCHER', 'CAVALRY'],
+    attackPower: 0,
+    attackRange: 0,
+    attackCooldownMs: 0,
     description: 'Military facility used to recruit spearmen, archers, and cavalry.'
   },
   HOUSE: {
@@ -78,6 +84,9 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     maxHp: 450,
     populationProvided: 5,
     trainableUnits: [],
+    attackPower: 0,
+    attackRange: 0,
+    attackCooldownMs: 0,
     description: 'Provides housing to support up to 5 additional population.'
   },
   FARM: {
@@ -90,6 +99,9 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     maxHp: 400,
     populationProvided: 0,
     trainableUnits: [],
+    attackPower: 0,
+    attackRange: 0,
+    attackCooldownMs: 0,
     description: 'Renewable source of food for your population and military.'
   },
   TOWER: {
@@ -102,6 +114,11 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     maxHp: 1020,
     populationProvided: 0,
     trainableUnits: [],
+    // SIM-03: 10 damage per 2s shot. Ten seconds to drop an unarmoured
+    // villager, which is enough to matter without making a lone tower a wall.
+    attackPower: 10,
+    attackRange: 8,
+    attackCooldownMs: 2000,
     description: 'Defensive structure that fires arrows at approaching enemy forces.'
   }
 };

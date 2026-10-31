@@ -35,6 +35,14 @@ export interface BuildingBlueprint {
   maxHp: number;
   populationProvided: number;
   trainableUnits: UnitType[];
+  /**
+   * SIM-03: defensive buildings shoot. `attackRange` of 0 means the building
+   * never attacks, which is every building except the tower. Range is measured
+   * from the building's footprint edge, in tiles.
+   */
+  attackPower: number;
+  attackRange: number;
+  attackCooldownMs: number;
   description: string;
 }
 
