@@ -304,6 +304,8 @@ export class EntityRenderer {
         // CMD-01: an attack-moving or patrolling unit is walking, fight or not.
         case 'ATTACK_MOVE':
         case 'PATROL':
+        // SIM-02: carrying a load back to a drop-off is a walk, not a gather.
+        case 'RETURNING':
           desired = walkAnim;
           break;
         case 'HARVESTING':

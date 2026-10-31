@@ -109,10 +109,10 @@ flowchart TD
 | CMD-04 | 2 | M | DONE |
 | CMD-05 | 2 | L | DONE |
 | CMD-06 | 2 | S | DONE |
-| SIM-01 | 3 | L | TODO |
-| SIM-02 | 3 | L | TODO |
+| SIM-01 | 3 | L | DONE |
+| SIM-02 | 3 | L | DONE |
 | SIM-03 | 3 | M | DONE |
-| SIM-04 | 3 | M | TODO |
+| SIM-04 | 3 | M | DONE |
 
 Size: **S** < 2h, **M** ~ nửa ngày, **L** >= 1 ngày.
 

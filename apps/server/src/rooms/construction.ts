@@ -42,6 +42,29 @@ export function getBuildApproachPoint(
   index: number,
   count: number
 ): { x: number; y: number } {
+  return approachPointOutsideFootprint(
+    unit,
+    building,
+    index,
+    count,
+    BUILD_APPROACH_DISTANCE
+  );
+}
+
+/**
+ * Point on the ring `distance` outside a footprint, on the ray from the building
+ * centre through the unit.
+ *
+ * The geometry is shared by building sites and drop-offs (SIM-02), which is why
+ * the distance is a parameter here instead of the builder constant.
+ */
+export function approachPointOutsideFootprint(
+  unit: UnitState,
+  building: BuildingState,
+  index: number,
+  count: number,
+  distance: number
+): { x: number; y: number } {
   const centerX = building.gridX + building.sizeX / 2;
   const centerY = building.gridY + building.sizeY / 2;
 
@@ -55,8 +78,8 @@ export function getBuildApproachPoint(
 
   // Project onto the rectangle grown by the approach distance: the largest
   // scale that keeps the ray inside that rectangle's border.
-  const halfX = building.sizeX / 2 + BUILD_APPROACH_DISTANCE;
-  const halfY = building.sizeY / 2 + BUILD_APPROACH_DISTANCE;
+  const halfX = building.sizeX / 2 + distance;
+  const halfY = building.sizeY / 2 + distance;
   const scale = 1 / Math.max(Math.abs(dirX) / halfX, Math.abs(dirY) / halfY);
 
   return {

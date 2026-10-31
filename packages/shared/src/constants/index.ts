@@ -57,6 +57,7 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     attackPower: 0,
     attackRange: 0,
     attackCooldownMs: 0,
+    dropOffs: ['wood', 'food', 'gold', 'stone'],
     description: 'The heart of your settlement. Trains villagers and provides core population.'
   },
   BARRACKS: {
@@ -72,6 +73,7 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     attackPower: 0,
     attackRange: 0,
     attackCooldownMs: 0,
+    dropOffs: [],
     description: 'Military facility used to recruit spearmen, archers, and cavalry.'
   },
   HOUSE: {
@@ -87,6 +89,7 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     attackPower: 0,
     attackRange: 0,
     attackCooldownMs: 0,
+    dropOffs: [],
     description: 'Provides housing to support up to 5 additional population.'
   },
   FARM: {
@@ -102,6 +105,7 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     attackPower: 0,
     attackRange: 0,
     attackCooldownMs: 0,
+    dropOffs: [],
     description: 'Renewable source of food for your population and military.'
   },
   TOWER: {
@@ -119,6 +123,7 @@ export const BUILDING_BLUEPRINTS: Record<BuildingType, BuildingBlueprint> = {
     attackPower: 10,
     attackRange: 8,
     attackCooldownMs: 2000,
+    dropOffs: [],
     description: 'Defensive structure that fires arrows at approaching enemy forces.'
   }
 };
@@ -137,6 +142,7 @@ export const UNIT_BLUEPRINTS: Record<UnitType, UnitBlueprint> = {
     canHarvest: true,
     aggroRadius: 0,
     buildPower: 1,
+    carryCapacity: 10,
     description: 'Gathers resources and constructs buildings for your empire.'
   },
   SPEARMAN: {
@@ -152,6 +158,7 @@ export const UNIT_BLUEPRINTS: Record<UnitType, UnitBlueprint> = {
     canHarvest: false,
     aggroRadius: 6,
     buildPower: 0,
+    carryCapacity: 0,
     description: 'Infantry unit equipped with spears, excellent against cavalry.'
   },
   ARCHER: {
@@ -167,6 +174,7 @@ export const UNIT_BLUEPRINTS: Record<UnitType, UnitBlueprint> = {
     canHarvest: false,
     aggroRadius: 6,
     buildPower: 0,
+    carryCapacity: 0,
     description: 'Ranged unit capable of firing arrows from distance.'
   },
   CAVALRY: {
@@ -182,6 +190,7 @@ export const UNIT_BLUEPRINTS: Record<UnitType, UnitBlueprint> = {
     canHarvest: false,
     aggroRadius: 6,
     buildPower: 0,
+    carryCapacity: 0,
     description: 'Fast and powerful mounted warrior suited for hit-and-run tactics.'
   }
 };

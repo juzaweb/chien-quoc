@@ -18,6 +18,8 @@ export type UnitActionState =
   | 'MOVING'
   | 'ATTACKING'
   | 'HARVESTING'
+  /** SIM-02: carrying a full load to the nearest drop-off. */
+  | 'RETURNING'
   /** CMD-01: walk to a point, engaging every enemy met on the way. */
   | 'ATTACK_MOVE'
   /** CMD-01: walk back and forth between two points, engaging on the way. */
@@ -43,6 +45,11 @@ export interface BuildingBlueprint {
   attackPower: number;
   attackRange: number;
   attackCooldownMs: number;
+  /**
+   * SIM-02: resource types this building accepts. Empty means it is not a
+   * drop-off at all, so a villager carrying wood walks past it.
+   */
+  dropOffs: ResourceType[];
   description: string;
 }
 
@@ -69,6 +76,11 @@ export interface UnitBlueprint {
    * build power needs, so two villagers on one foundation halve it.
    */
   buildPower: number;
+  /**
+   * SIM-02: how many units of a resource a villager carries before walking it
+   * back to a drop-off. `0` for units that cannot gather.
+   */
+  carryCapacity: number;
   description: string;
 }
 

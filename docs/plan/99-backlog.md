@@ -75,8 +75,20 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
   vì các lệnh đó idempotent (`STOP_UNITS`/select lại cùng unit thì kết quả như cũ), nhưng
   nên rà một lượt: thêm một helper dùng chung (timestamp debounce hoặc
   `Phaser.Input.Keyboard.JustDown` trên `Key` object) thay vì mỗi `bind*` tự xử lý.
-- **`WorldScene.ts` 2151 dòng, `WorldRoom.ts` 1409 dòng** — cả hai đã vượt mốc ~1000 dòng
-  và mỗi CTL/CMD lại thêm vào. Đề xuất tách trước khi làm CMD-01/CMD-05: input/selection
-  (`WorldScene`), overlay/hotkey (`WorldScene`, đã chớm thành nhóm `bind*` + `update*`),
-  và chia `WorldRoom` thành movement / combat / economy / commands. Không làm trong lúc
-  đang mở diff CTL-02..07 để tránh trộn refactor với feature.
+- **`WorldRoom.ts` 2215 dòng** — `WorldScene.ts` đã tách xong (2388 → 740, xem
+  `game/input/*` + `game/render/*`), nhưng phía server thì ngược lại: mỗi CMD/SIM lại thêm
+  vào một file. Đề xuất tách `WorldRoom` thành movement / combat / economy / commands, bắt
+  đầu từ economy (harvest + drop-off, đã đủ lớn sau SIM-02) — `construction.ts` và
+  `geometry.ts` đã là tiền lệ tốt.
+- **Pathfinding không tự tính lại khi có vật cản mới** — path chỉ tính lúc ra lệnh; đặt nhà
+  lên đường đi của một unit đang trên đường thì nó đi xuyên qua nhà đó cho tới đích. Cần
+  kiểm tra ô kế tiếp mỗi tick và xin path mới khi bị chặn (hoặc dùng hàng đợi path có sẵn).
+- **Path không lưu vào SQLite** — sau restart, unit đang `MOVING` được khôi phục với
+  `targetX/targetY` cũ nhưng `pathX/pathY` rỗng nên đi thẳng. Chấp nhận được, nhưng nếu
+  muốn đúng thì lưu thêm hoặc tính lại path lúc restore.
+- **Chưa hiện tài nguyên đang mang trên client** — SIM-02 đã có `carryingAmount` /
+  `carryingResourceType` trong schema nhưng HUD/đầu dân chưa vẽ icon; người chơi không biết
+  dân đang mang gì cho tới khi tài nguyên nhảy số ở TC.
+- **Chưa có Mill / Lumber Camp / Mining Camp** — `BuildingBlueprint.dropOffs` đã hỗ trợ
+  nhưng hiện chỉ TOWN_CENTER nhận tài nguyên, nên mọi chuyến hàng đều đi về TC và kinh tế
+  chậm hơn AoE ở các mỏ xa.

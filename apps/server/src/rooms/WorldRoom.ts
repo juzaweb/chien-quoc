@@ -14,6 +14,7 @@ import {
   POPULATION_PER_HOUSE,
   PlaceBuildingPayload,
   Resources,
+  ResourceType,
   MoveUnitsPayload,
   TrainUnitPayload,
   AttackTargetPayload,
@@ -36,8 +37,14 @@ import { PlayerState } from '../schema/PlayerState.js';
 import { BuildingState } from '../schema/BuildingState.js';
 import { UnitState } from '../schema/UnitState.js';
 import { ResourceNodeState } from '../schema/ResourceNodeState.js';
-import { getBuildApproachPoint, isWithinBuildRange, syncBuilders } from './construction.js';
+import {
+  approachPointOutsideFootprint,
+  getBuildApproachPoint,
+  isWithinBuildRange,
+  syncBuilders
+} from './construction.js';
 import { distanceToFootprint } from './geometry.js';
+import { Pathfinder } from '../services/Pathfinder.js';
 
 const PLAYER_COLORS = [
   '#3b82f6', // Blue
@@ -61,12 +68,48 @@ const FORMATION_SPACING = 0.6;
 const HARVEST_RETARGET_RADIUS = 10;
 
 /**
+ * SIM-02: units a villager takes off a node per second of harvesting. One
+ * second's worth fills a starting villager's carry capacity (10), so the walk
+ * to a drop-off and back — not the gathering — is what limits the economy.
+ */
+const GATHER_AMOUNT_PER_SECOND = 10;
+
+/**
+ * How close to a drop-off's footprint edge a villager has to be for the load to
+ * be banked. Matches the build range on purpose: both mean "standing next to the
+ * building", and the approach point is only 0.5 tiles outside the footprint.
+ */
+const DROP_OFF_RANGE = 1.5;
+
+/** Distance outside the footprint a villager walks to in order to unload. */
+const DROP_OFF_APPROACH_DISTANCE = 0.5;
+
+/**
  * CMD-04b refund rule. AoE returns everything for a foundation that was only
  * just placed and less once work has gone into it. These two constants keep the
  * agreed numbers in one place instead of inline in the handler.
  */
 const CANCEL_BUILDING_FULL_REFUND_BELOW = 10; // construction progress %
 const CANCEL_BUILDING_PARTIAL_REFUND_RATIO = 0.5;
+
+/**
+ * SIM-01: how many path requests one tick may compute. A 220x220 corner-to-
+ * corner search measures ~0.9 ms, so a 120-unit order would be a ~100 ms stall
+ * if it were answered in one tick; spreading it over ticks keeps the simulation
+ * at its 20 Hz cadence and every unit walks the straight line until its route
+ * is ready.
+ */
+const MAX_PATHS_PER_TICK = 12;
+
+/** Wall-clock budget for pathfinding inside one tick, in ms. */
+const PATH_BUDGET_MS = 3;
+
+/**
+ * The blocked grid is rebuilt when the number of buildings or resource nodes
+ * changes, and at least this often — a cheap safety net for anything that
+ * changes a footprint without changing those counts.
+ */
+const BLOCKED_GRID_MAX_AGE_MS = 1000;
 
 /**
  * Lays a squad out as a centred square block around its destination.
@@ -124,6 +167,15 @@ export class WorldRoom extends Room<{ state: WorldState }> {
    * `processUnitHarvest` re-seeds it from the live node instead of dying.
    */
   private harvestTypeByUnit: Map<string, string> = new Map();
+  /** SIM-01: reused across searches; see `Pathfinder`. */
+  private readonly pathfinder = new Pathfinder();
+  private blockedGrid: Uint8Array | null = null;
+  private blockedGridBuildingCount = -1;
+  private blockedGridResourceCount = -1;
+  private blockedGridBuiltAt = 0;
+  /** Unit ids waiting for a route, oldest first. `pendingPathIds` dedupes. */
+  private pendingPaths: string[] = [];
+  private pendingPathIds: Set<string> = new Set();
   private readyPromise: Promise<void> | null = null;
   private worldRestoreError: Error | null = null;
 
@@ -870,8 +922,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
       unit.queueTargetX.clear();
       unit.queueTargetY.clear();
-      unit.targetX = targetX;
-      unit.targetY = targetY;
+      this.setWalkTarget(unit, targetX, targetY);
       unit.actionState = 'MOVING';
       unit.targetEntityId = '';
       unit.targetEntityType = '';
@@ -904,8 +955,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       return false;
     }
 
-    unit.targetX = nextX;
-    unit.targetY = nextY;
+    this.setWalkTarget(unit, nextX, nextY);
     unit.targetEntityId = '';
     unit.targetEntityType = '';
     unit.actionState = 'MOVING';
@@ -1169,6 +1219,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         // make the unit resume an old route after the attack finishes.
         unit.queueTargetX.clear();
         unit.queueTargetY.clear();
+        // The chase is straight-line, so a route to the old destination would
+        // only pull the unit off the target if the fight ends.
+        unit.pathX.clear();
+        unit.pathY.clear();
         // A plain attack has nothing to return to (CMD-01).
         unit.previousActionState = '';
         unit.targetEntityId = payload.targetEntityId;
@@ -1213,8 +1267,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       unit.targetEntityId = '';
       unit.targetEntityType = '';
       unit.previousActionState = '';
-      unit.targetX = targetX;
-      unit.targetY = targetY;
+      this.setWalkTarget(unit, targetX, targetY);
 
       if (mode === 'PATROL') {
         // The route starts where the unit stands, so it walks back here once it
@@ -1273,8 +1326,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       unit.targetEntityId = building.id;
       unit.targetEntityType = 'building';
       unit.previousActionState = '';
-      unit.targetX = approach.x;
-      unit.targetY = approach.y;
+      this.setWalkTarget(unit, approach.x, approach.y);
       unit.actionState = 'BUILDING';
       // Leaving a woodline for a build site must not leave a stale retarget type
       // behind, or a later depleted node would pull the villager back to it.
@@ -1330,8 +1382,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         unit.queueTargetY.clear();
         unit.targetEntityId = payload.resourceNodeId;
         unit.targetEntityType = 'resource';
-        unit.targetX = resource.gridX;
-        unit.targetY = resource.gridY;
+        this.setWalkTarget(unit, resource.gridX, resource.gridY);
         unit.actionState = 'HARVESTING';
         unit.previousActionState = '';
         // Remember the type so a depleted node can hand the villager to the
@@ -1373,6 +1424,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       unit.previousActionState = '';
       unit.targetX = unit.x;
       unit.targetY = unit.y;
+      unit.pathX.clear();
+      unit.pathY.clear();
+      // SIM-02: the load stays in hand (it was already taken from the world),
+      // but the trip to a drop-off is cancelled with everything else.
+      unit.dropOffId = '';
       unit.queueTargetX.clear();
       unit.queueTargetY.clear();
       this.harvestTypeByUnit.delete(unit.id);
@@ -1425,6 +1481,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
   private update(deltaTime: number) {
     const dtSeconds = deltaTime / 1000;
+
+    // SIM-01: hand out a few routes before anyone moves. Units whose request is
+    // still queued keep walking straight, which is exactly the pre-SIM-01
+    // behaviour, so a delayed route is never worse than no pathfinding.
+    this.processPendingPaths();
 
     // 1. Update construction and training queues for buildings
     this.state.buildings.forEach((building: BuildingState) => {
@@ -1504,7 +1565,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         unit.actionState === 'ATTACKING' ||
         unit.actionState === 'ATTACK_MOVE' ||
         unit.actionState === 'PATROL' ||
-        unit.actionState === 'BUILDING'
+        unit.actionState === 'BUILDING' ||
+        unit.actionState === 'RETURNING'
       ) {
         let destinationX = unit.targetX;
         let destinationY = unit.targetY;
@@ -1531,6 +1593,14 @@ export class WorldRoom extends Room<{ state: WorldState }> {
           destinationY = targetY;
         }
 
+        // SIM-01: follow the computed route while it lasts. A route ends on the
+        // goal tile, whose centre can sit up to half a tile from the click
+        // point, so the last stretch is walked straight to `targetX/targetY`.
+        if (unit.actionState !== 'ATTACKING' && unit.pathX.length > 0) {
+          destinationX = unit.pathX[0];
+          destinationY = unit.pathY[0];
+        }
+
         const dx = destinationX - unit.x;
         const dy = destinationY - unit.y;
         const dist = Math.hypot(dx, dy);
@@ -1543,6 +1613,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
           const moveStep = Math.min(dist, unit.speed * dtSeconds);
           unit.x += (dx / dist) * moveStep;
           unit.y += (dy / dist) * moveStep;
+        } else if (unit.actionState !== 'ATTACKING' && unit.pathX.length > 0) {
+          // Reached an intermediate tile: drop it and head for the next one on
+          // the following tick. The order only completes when the path is spent.
+          unit.pathX.shift();
+          unit.pathY.shift();
         } else {
           if (unit.actionState === 'MOVING' || unit.actionState === 'ATTACK_MOVE') {
             // Arrived: walk on to the next queued waypoint if there is one. An
@@ -1559,8 +1634,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
             } else {
               unit.patrolX = unit.targetX;
               unit.patrolY = unit.targetY;
-              unit.targetX = nextX;
-              unit.targetY = nextY;
+              this.setWalkTarget(unit, nextX, nextY);
             }
           }
         }
@@ -1580,6 +1654,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       // dropping the order when the foundation is finished or gone.
       if (unit.actionState === 'BUILDING') {
         this.processUnitBuilding(unit);
+      }
+
+      // SIM-02: banking the load once the walk back to the drop-off is done.
+      if (unit.actionState === 'RETURNING') {
+        this.processUnitReturning(unit);
       }
     });
   }
@@ -1616,8 +1695,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       const rallyY = Math.max(0, Math.min(MAP_GRID_HEIGHT - 1, building.rallyY));
       // A rally point on the spawn tile needs no order; anything else does.
       if (rallyX !== unit.x || rallyY !== unit.y) {
-        unit.targetX = rallyX;
-        unit.targetY = rallyY;
+        this.setWalkTarget(unit, rallyX, rallyY);
         unit.actionState = 'MOVING';
       }
     }
@@ -1744,6 +1822,116 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   /**
+   * Gives a unit a new walking destination and queues a fresh route to it.
+   *
+   * Every order that moves a unit goes through here, so a stale route cannot
+   * survive a new order: the old waypoints are dropped immediately and the new
+   * one is computed on an upcoming tick. Nothing is queued for a destination the
+   * unit is already standing on.
+   */
+  private setWalkTarget(unit: UnitState, targetX: number, targetY: number) {
+    unit.targetX = targetX;
+    unit.targetY = targetY;
+    unit.pathX.clear();
+    unit.pathY.clear();
+
+    if (Math.hypot(targetX - unit.x, targetY - unit.y) < 0.01) return;
+
+    if (this.pendingPathIds.has(unit.id)) return;
+    this.pendingPathIds.add(unit.id);
+    this.pendingPaths.push(unit.id);
+  }
+
+  /**
+   * Answers a bounded number of queued path requests per tick.
+   *
+   * The goal is read from the unit's own target rather than from the request, so
+   * a unit re-ordered while it waits for a route is routed to its current
+   * destination instead of the one it asked for earlier.
+   */
+  private processPendingPaths() {
+    if (this.pendingPaths.length === 0) return;
+
+    const blocked = this.getBlockedGrid();
+    const deadline = performance.now() + PATH_BUDGET_MS;
+    let computed = 0;
+
+    while (this.pendingPaths.length > 0 && computed < MAX_PATHS_PER_TICK) {
+      const unitId = this.pendingPaths.shift() as string;
+      this.pendingPathIds.delete(unitId);
+
+      const unit = this.state.units.get(unitId);
+      if (!unit) continue;
+      computed++;
+
+      const route = this.pathfinder.findPath(
+        { x: unit.x, y: unit.y },
+        { x: unit.targetX, y: unit.targetY },
+        blocked
+      );
+
+      unit.pathX.clear();
+      unit.pathY.clear();
+      // No route (walled in, or the search hit its budget): the unit walks the
+      // straight line, which is the pre-SIM-01 behaviour.
+      if (!route) continue;
+
+      for (const point of route) {
+        unit.pathX.push(point.x);
+        unit.pathY.push(point.y);
+      }
+
+      if (performance.now() >= deadline) break;
+    }
+  }
+
+  /**
+   * Current blocked-tile snapshot, rebuilt only when the world changed shape.
+   *
+   * Paths are only computed when an order arrives and in bounded batches, so the
+   * rebuild is off the per-tick path entirely; the age check is a safety net for
+   * a footprint that changes without the building count changing.
+   */
+  private getBlockedGrid(): Uint8Array {
+    const buildingCount = this.state.buildings.size;
+    const resourceCount = this.state.resourceNodes.size;
+    const stale =
+      this.blockedGrid === null ||
+      this.blockedGridBuildingCount !== buildingCount ||
+      this.blockedGridResourceCount !== resourceCount ||
+      performance.now() - this.blockedGridBuiltAt > BLOCKED_GRID_MAX_AGE_MS;
+
+    if (!stale) return this.blockedGrid as Uint8Array;
+
+    const grid = this.blockedGrid ?? new Uint8Array(MAP_GRID_WIDTH * MAP_GRID_HEIGHT);
+    grid.fill(0);
+
+    this.state.buildings.forEach((building: BuildingState) => {
+      const endX = Math.min(MAP_GRID_WIDTH, building.gridX + building.sizeX);
+      const endY = Math.min(MAP_GRID_HEIGHT, building.gridY + building.sizeY);
+      for (let y = Math.max(0, building.gridY); y < endY; y++) {
+        for (let x = Math.max(0, building.gridX); x < endX; x++) {
+          grid[y * MAP_GRID_WIDTH + x] = 1;
+        }
+      }
+    });
+
+    this.state.resourceNodes.forEach((node: ResourceNodeState) => {
+      if (node.remainingAmount <= 0) return;
+      if (node.gridX < 0 || node.gridY < 0) return;
+      if (node.gridX >= MAP_GRID_WIDTH || node.gridY >= MAP_GRID_HEIGHT) return;
+      grid[node.gridY * MAP_GRID_WIDTH + node.gridX] = 1;
+    });
+
+    this.blockedGrid = grid;
+    this.blockedGridBuildingCount = buildingCount;
+    this.blockedGridResourceCount = resourceCount;
+    this.blockedGridBuiltAt = performance.now();
+
+    return grid;
+  }
+
+  /**
    * Finds the closest node of `resourceType` within `radius` tiles of the unit.
    * Depleted nodes are skipped: a node can linger for a tick between its last
    * harvest and the delete, and sending a villager there would strand it.
@@ -1786,17 +1974,30 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     unit.targetEntityId = node.id;
     unit.targetEntityType = 'resource';
-    unit.targetX = node.gridX;
-    unit.targetY = node.gridY;
+    this.setWalkTarget(unit, node.gridX, node.gridY);
     unit.actionState = 'HARVESTING';
     return true;
   }
 
   private processUnitHarvest(unit: UnitState, deltaTime: number) {
+    const carryCapacity = UNIT_BLUEPRINTS[unit.type as UnitType]?.carryCapacity ?? 0;
+    if (carryCapacity <= 0) return;
+
+    // SIM-02: a villager holding a full load banks it instead of harvesting over
+    // it. This is also the exit for anyone restored mid-order after a restart.
+    if (unit.carryingAmount >= carryCapacity) {
+      this.startReturning(unit);
+      return;
+    }
+
     const resource = this.state.resourceNodes.get(unit.targetEntityId);
     if (!resource) {
       // Another villager may have emptied this node while this one was walking
-      // to it. Retry a neighbour of the same type before giving up.
+      // to it. Bank whatever is already carried before looking for a new node.
+      if (unit.carryingAmount > 0) {
+        this.startReturning(unit);
+        return;
+      }
       if (!this.retargetHarvest(unit)) {
         this.harvestTypeByUnit.delete(unit.id);
         this.resumeQueuedWaypoint(unit);
@@ -1810,38 +2011,158 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.harvestTypeByUnit.set(unit.id, resource.resourceType);
     }
 
-    const dist = Math.hypot(resource.gridX - unit.x, resource.gridY - unit.y);
-    if (dist <= 1.5) {
-      const timerKey = `harv_${unit.id}`;
-      let harvestTimer = this.harvestTimers.get(timerKey) || 0;
-      harvestTimer += deltaTime;
-
-      // Harvest interval every 1 second
-      if (harvestTimer >= 1000) {
-        harvestTimer = 0;
-        const player = this.state.players.get(unit.ownerId);
-        if (player) {
-          const harvestAmount = Math.min(10, resource.remainingAmount);
-          resource.remainingAmount -= harvestAmount;
-
-          if (resource.resourceType === 'wood') player.wood += harvestAmount;
-          else if (resource.resourceType === 'food') player.food += harvestAmount;
-          else if (resource.resourceType === 'gold') player.gold += harvestAmount;
-          else if (resource.resourceType === 'stone') player.stone += harvestAmount;
-
-          if (resource.remainingAmount <= 0) {
-            this.state.resourceNodes.delete(resource.id);
-            // AoE behaviour: keep working by walking to the next node of the
-            // same type instead of standing idle next to an empty stump.
-            if (!this.retargetHarvest(unit)) {
-              this.harvestTypeByUnit.delete(unit.id);
-              this.resumeQueuedWaypoint(unit);
-            }
-          }
-        }
-      }
-      this.harvestTimers.set(timerKey, harvestTimer);
+    // The carry slot remembers one type only, so a villager ordered from a wood
+    // line to a gold mine banks the wood first instead of turning it into gold.
+    if (unit.carryingAmount > 0 && unit.carryingResourceType !== resource.resourceType) {
+      this.startReturning(unit);
+      return;
     }
+
+    const dist = Math.hypot(resource.gridX - unit.x, resource.gridY - unit.y);
+    if (dist > 1.5) return;
+
+    const timerKey = `harv_${unit.id}`;
+    const harvestTimer = (this.harvestTimers.get(timerKey) || 0) + deltaTime;
+    if (harvestTimer < 1000) {
+      this.harvestTimers.set(timerKey, harvestTimer);
+      return;
+    }
+    this.harvestTimers.set(timerKey, 0);
+
+    const taken = Math.min(
+      GATHER_AMOUNT_PER_SECOND,
+      resource.remainingAmount,
+      carryCapacity - unit.carryingAmount
+    );
+
+    if (taken > 0) {
+      resource.remainingAmount -= taken;
+      unit.carryingAmount += taken;
+      unit.carryingResourceType = resource.resourceType;
+    }
+
+    if (resource.remainingAmount <= 0) {
+      this.state.resourceNodes.delete(resource.id);
+      // AoE behaviour: bank what is in hand, then walk to the next node of the
+      // same type instead of standing idle next to an empty stump.
+      if (unit.carryingAmount > 0) {
+        this.startReturning(unit);
+      } else if (!this.retargetHarvest(unit)) {
+        this.harvestTypeByUnit.delete(unit.id);
+        this.resumeQueuedWaypoint(unit);
+      }
+      return;
+    }
+
+    if (unit.carryingAmount >= carryCapacity) {
+      this.startReturning(unit);
+    }
+  }
+
+  /**
+   * SIM-02: sends a loaded villager to the closest building that accepts what it
+   * carries.
+   *
+   * `targetEntityId` keeps pointing at the resource node so the unit knows where
+   * to go back to; `dropOffId` is what the return trip targets. With nowhere to
+   * unload, the villager stops holding its load instead of the resources
+   * evaporating into nothing.
+   */
+  private startReturning(unit: UnitState) {
+    const dropOff = this.findNearestDropOff(unit, unit.carryingResourceType);
+
+    if (!dropOff) {
+      unit.dropOffId = '';
+      unit.actionState = 'IDLE';
+      unit.targetX = unit.x;
+      unit.targetY = unit.y;
+      unit.pathX.clear();
+      unit.pathY.clear();
+      return;
+    }
+
+    unit.dropOffId = dropOff.id;
+    unit.actionState = 'RETURNING';
+    const approach = approachPointOutsideFootprint(unit, dropOff, 0, 1, DROP_OFF_APPROACH_DISTANCE);
+    this.setWalkTarget(unit, approach.x, approach.y);
+  }
+
+  /** Closest finished building of the unit's owner that accepts `resourceType`. */
+  private findNearestDropOff(unit: UnitState, resourceType: string): BuildingState | null {
+    if (!resourceType) return null;
+
+    let nearest: BuildingState | null = null;
+    let nearestDist = Infinity;
+
+    this.state.buildings.forEach((building: BuildingState) => {
+      if (building.ownerId !== unit.ownerId || !building.isConstructed) return;
+
+      const blueprint = BUILDING_BLUEPRINTS[building.type as BuildingType];
+      if (!blueprint || !blueprint.dropOffs.includes(resourceType as ResourceType)) return;
+
+      const dist = distanceToFootprint(unit.x, unit.y, building);
+      if (dist < nearestDist) {
+        nearest = building;
+        nearestDist = dist;
+      }
+    });
+
+    return nearest;
+  }
+
+  /**
+   * SIM-02: banks the load once the villager reaches its drop-off, then sends it
+   * back to the node it came from.
+   *
+   * The drop-off is re-read from state every tick, so a building destroyed while
+   * the villager is walking there never pays out: the trip is re-planned against
+   * another drop-off, or the villager stops holding the load when none is left.
+   */
+  private processUnitReturning(unit: UnitState) {
+    const dropOff = this.state.buildings.get(unit.dropOffId);
+    const accepts =
+      !!dropOff &&
+      dropOff.isConstructed &&
+      dropOff.ownerId === unit.ownerId &&
+      (BUILDING_BLUEPRINTS[dropOff.type as BuildingType]?.dropOffs.includes(
+        unit.carryingResourceType as ResourceType
+      ) ?? false);
+
+    if (!accepts) {
+      this.startReturning(unit);
+      return;
+    }
+
+    if (distanceToFootprint(unit.x, unit.y, dropOff) > DROP_OFF_RANGE) return;
+
+    const player = this.state.players.get(unit.ownerId);
+    if (!player) return;
+
+    if (unit.carryingAmount > 0) {
+      this.creditResource(player, unit.carryingResourceType, unit.carryingAmount);
+      unit.carryingAmount = 0;
+      unit.carryingResourceType = '';
+    }
+    unit.dropOffId = '';
+
+    const node = this.state.resourceNodes.get(unit.targetEntityId);
+    if (node) {
+      unit.actionState = 'HARVESTING';
+      this.setWalkTarget(unit, node.gridX, node.gridY);
+    } else if (!this.retargetHarvest(unit)) {
+      this.harvestTypeByUnit.delete(unit.id);
+      this.resumeQueuedWaypoint(unit);
+    }
+  }
+
+  /** Adds `amount` of `resourceType` to a player's stockpile. */
+  private creditResource(player: PlayerState, resourceType: string, amount: number) {
+    if (amount <= 0) return;
+
+    if (resourceType === 'wood') player.wood += amount;
+    else if (resourceType === 'food') player.food += amount;
+    else if (resourceType === 'gold') player.gold += amount;
+    else if (resourceType === 'stone') player.stone += amount;
   }
 
   private updatePlayerPopulation(ownerId: string) {

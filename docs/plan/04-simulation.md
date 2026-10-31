@@ -4,9 +4,43 @@
 
 ---
 
-## SIM-01 — Pathfinding
+## SIM-01 — Pathfinding — DONE
 
-**Vấn đề:** `update()` di chuyển thẳng A→B; lính xuyên qua rừng, mỏ, nhà.
+**Trạng thái:** xong. `apps/server/src/services/Pathfinder.ts` (A* 4 hướng trên lưới
+220×220, binary heap, mảng làm việc cấp phát một lần + generation stamp thay cho việc
+xoá 48k ô mỗi lần tìm). `UnitState` thêm `pathX`/`pathY`; `update()` đi theo waypoint và
+tiêu thụ từng ô khi tới, đoạn cuối đi thẳng tới `targetX/targetY`.
+
+Quyết định:
+- **Heuristic Manhattan, không phải octile** như plan ghi. Di chuyển là 4 hướng, chi phí
+  mỗi bước = 1; octile vẫn admissible nhưng ước lượng cao hơn chi phí thật của phần chéo
+  nên A* nở thêm node vô ích. Manhattan là heuristic khớp đúng bài toán.
+- **Lưới chặn có cache**: dựng từ footprint của `state.buildings` + `state.resourceNodes`
+  còn tài nguyên. Chỉ dựng lại khi số building hoặc số node đổi, hoặc quá 1 giây — không
+  nằm trên đường đi mỗi tick.
+- **Không tính path mỗi tick**: lệnh mới đẩy unit id vào hàng đợi, mỗi tick xử lý tối đa
+  12 path / 3 ms. Đích đọc từ `targetX/targetY` hiện tại của unit chứ không phải từ request,
+  nên unit bị ra lệnh lại giữa lúc chờ sẽ đi theo đích mới.
+- **Fallback đúng như plan**: không có đường (bị vây, hoặc vượt ngân sách tìm kiếm) thì
+  path rỗng và unit đi thẳng như trước — không bao giờ đứng im.
+- Đích nằm trong vật cản (click vào cây/nhà, hoặc ô đội hình rơi vào tường) được kéo về ô
+  trống gần nhất trong bán kính 3 — lệnh vẫn có nghĩa "đi gần nhất có thể".
+
+Đo: A* chéo góc 220×220 trên map trống **0.88 ms/path** (20 lần lấy trung bình) — nên
+ngân sách 12 path/tick là ~10 ms xấu nhất, thực tế thường ngắn hơn nhiều vì path ngắn.
+Probe socket thật 8/8 PASS: dân đi từ (37,86) tới (27,87) vòng qua Town Center 4×4
+(15 waypoint), không mẫu nào nằm trong footprint, tới nơi `IDLE` đúng toạ độ; lệnh mới
+được cấp path mới (15 waypoint) chứ không dùng lại path cũ. Test tự động: 3 test
+`pathfinding (SIM-01)` trong `WorldRoom.test.ts` (vòng qua tường, không có đường thì đi
+thẳng và vẫn tiến, lệnh mới xoá path cũ) + 8 test `Pathfinder.test.ts`.
+
+**Chưa làm (ghi backlog):** không tự tính lại path khi có nhà mới mọc giữa đường (unit sẽ
+đi xuyên qua nhà vừa đặt); không mô hình hoá va chạm unit–unit; path không lưu vào SQLite
+nên sau restart unit đi thẳng tới đích cũ.
+
+---
+
+**Vấn đề gốc:** `update()` di chuyển thẳng A→B; lính xuyên qua rừng, mỏ, nhà.
 Đây là điểm lệch chuẩn AoE lớn nhất về cảm giác chơi.
 
 **Phạm vi tối thiểu (khuyến nghị làm trước):**
@@ -33,9 +67,47 @@ Nếu > 5ms, phải giới hạn số path tính mỗi tick (hàng đợi, tối
 
 ---
 
-## SIM-02 — Drop-off & carry capacity
+## SIM-02 — Drop-off & carry capacity — DONE
 
-> **ĐÃ CHỐT: LÀM.** Đi kèm CMD-05 để kinh tế về đúng chuẩn AoE.
+**Trạng thái:** xong. `UnitBlueprint.carryCapacity` (dân 10, lính 0),
+`BuildingBlueprint.dropOffs` (TOWN_CENTER: cả 4 loại; các building khác rỗng — chưa có
+Mill/Lumber Camp nên TC là drop-off duy nhất), `UnitState.dropOffId`, action state mới
+`RETURNING`.
+
+Luồng: dân đứng cạnh node → mỗi giây lấy `GATHER_AMOUNT_PER_SECOND = 10` vào
+`carryingAmount` (không cộng vào player) → đầy túi thì `RETURNING` tới drop-off gần nhất
+theo mép footprint, đi bằng pathfinding → tới nơi mới cộng tài nguyên vào player → quay
+lại đúng node cũ, hoặc sang node kế tiếp cùng loại nếu node đã cạn.
+
+Quyết định:
+- **`targetEntityId` vẫn trỏ node**, `dropOffId` riêng: nhờ vậy dân biết quay về đâu sau khi
+  trả hàng, và mỗi trường chỉ có một nghĩa.
+- **Mang dở thì vẫn trả** (node cạn giữa lúc đào) — đúng AoE, không xoá tài nguyên đã lấy
+  khỏi thế giới.
+- **Đổi loại tài nguyên khi đang mang**: `carryingResourceType` chỉ nhớ một loại, nên dân
+  mang gỗ được lệnh đi đào vàng sẽ **trả gỗ trước** rồi mới đào vàng. Không có chuyện gỗ
+  biến thành vàng.
+- **Mất drop-off giữa đường** (nhà bị phá): mỗi tick đọc lại `state.buildings`, không trả
+  tiền cho toạ độ ma; nếu còn drop-off khác thì tính đường lại, không còn thì dân đứng giữ
+  hàng chứ không làm mất tài nguyên.
+- `approachPointOutsideFootprint` tách sang `rooms/geometry.ts` và dùng chung cho cả
+  builder (CMD-05) lẫn dân đi trả hàng — cùng một bài toán "đứng sát mép footprint".
+- **Client**: `RETURNING` dùng animation đi bộ. Icon tài nguyên trên đầu dân để backlog.
+
+Đo (server thật, 1 account): dân cách TC 5 tile — túi đầy 10 gỗ, `wood` của player vẫn 300;
+`RETURNING` với `dropOffId = b_2861`; tới TC `wood 300 → 310`; quay lại `HARVESTING`
+`carry=0`; chuyến thứ hai `310 → 320` mất **2.6 s** (≈3.8 gỗ/s/dân, gồm cả đi lại). Probe
+9/9 PASS. Test tự động: 6 test `gathering and drop-off (SIM-02)` (mang đầy, trả hàng rồi
+quay lại node, mang dở khi node cạn, không có drop-off thì giữ hàng và IDLE, drop-off bị
+phá giữa đường không trả tiền, đổi loại tài nguyên thì trả trước).
+
+**Chưa làm (backlog):** chưa có Mill / Lumber Camp / Mining Camp nên mọi loại đều phải về
+TC; client chưa hiện icon tài nguyên đang mang; chưa có UI hiển thị tốc độ kinh tế để cân
+chỉnh `carryCapacity`.
+
+---
+
+**Vấn đề gốc:** `processUnitHarvest` cộng thẳng tài nguyên vào `player` mỗi 1s.
 
 **Vấn đề:** `processUnitHarvest` cộng thẳng tài nguyên vào `player` mỗi 1s.
 AoE bắt dân mang về TC / Lumber Camp / Mining Camp rồi mới cộng.
@@ -95,9 +167,33 @@ forces", nhưng `update()` **không** xử lý building combat. Tower chỉ là 
 
 ---
 
-## SIM-04 — Test
+## SIM-04 — Test — DONE
 
-**Hiện trạng:** không có test nào cho input, command, hay simulation tick.
+**Trạng thái:** xong. `vitest` 5.0 + `vitest.config.ts` trong `apps/server`, script
+`test` / `test:watch`. 15 test trong `apps/server/src/rooms/WorldRoom.test.ts`, chạy
+`npx vitest run` 15/15 pass, `tsc --noEmit` sạch (test file nằm trong `src/**` nên
+`tsc` kiểm luôn).
+
+Harness: `new WorldRoom()` + `room.setState(new WorldState())`, **không** gọi `onCreate()`
+(vì `onCreate` dựng simulation interval, autosave 30 s và restore SQLite — test không cần
+và timer sẽ giữ event loop). Handler private được gọi qua một helper `internals(room)`
+duy nhất thay vì rải `as any` khắp file; `update()` được gọi tay với `deltaTime` cụ thể,
+nên test tiến trình xây dựng chạy 50 tick trong vài ms thay vì chờ 5 giây thật.
+
+Phủ: `handleMoveUnits` lọc unit khác chủ + chặn quá `MAX_SELECTION`;
+`handleAttackTarget` chặn target đồng minh + xoá waypoint cũ khi đổi lệnh;
+`handleTrainUnit` trừ đúng giá và không trừ gì khi thiếu tài nguyên;
+`handlePlaceBuilding` chặn overlap và ngoài map, không trừ tài nguyên khi bị chặn;
+`update()` `MOVING → IDLE` khi tới đích, đi đúng `speed * deltaTime`, hoàn thành móng
+đúng `buildTimeMs` với 1 dân, móng không có dân thì đứng yên; SIM-03 tower bắn unit địch
+trong tầm, không bắn dân cùng chủ, không bắn khi còn là móng, và giãn đúng
+`attackCooldownMs`.
+
+Đã kiểm tra test có "răng": sửa tạm `collectOwnedUnits` bỏ check chủ và tower damage
+xuống 1 → 3 test đỏ đúng chỗ, revert xong xanh lại.
+
+**Chưa phủ:** dòng "Pathfinder tìm đường vòng" trong bảng dưới — `Pathfinder` chưa tồn tại,
+để sang SIM-01. Client (Phaser) không test.
 
 **Phạm vi khuyến nghị (chỉ server — client Phaser khó test):**
 

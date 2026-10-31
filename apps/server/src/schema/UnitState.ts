@@ -28,5 +28,13 @@ export class UnitState extends Schema {
   // is currently walking towards; these two swap on every arrival.
   @type('number') patrolX: number = 0;
   @type('number') patrolY: number = 0;
+  // SIM-01: remaining tiles of the current route, in walking order. Empty means
+  // "no route" and the unit walks the straight line to targetX/targetY, which is
+  // also the fallback when A* finds nothing. Recomputed per order, never per tick.
+  @type(['number']) pathX = new ArraySchema<number>();
+  @type(['number']) pathY = new ArraySchema<number>();
+  // SIM-02: the building this unit is walking its load to. `targetEntityId` keeps
+  // pointing at the resource node so the unit knows where to go back to.
+  @type('string') dropOffId: string = '';
 }
 
