@@ -22,6 +22,7 @@ import { installHudPointerGuard } from '../input/hudPointerGuard.js';
 import { EntityRenderer } from '../render/EntityRenderer.js';
 import { FocusIndicator } from '../render/FocusIndicator.js';
 import { TerrainLayer } from '../render/TerrainLayer.js';
+import { DEFAULT_DIRECTION_INDEX, DIRECTIONAL_WALK_UNITS, directionIndex } from '../render/unitDirections.js';
 
 /**
  * How far the pointer may travel (in world pixels) before a left-button press
@@ -245,6 +246,22 @@ export class WorldScene extends Phaser.Scene {
       frameHeight: 160
     });
     this.load.image('unit_CAVALRY_idle', `/assets/units/cavalry_idle.png?${uv}`);
+
+    // Directional walk sheets (8 rows x 4 frames). Units without one keep the
+    // single-facing sheet above and are mirrored instead of rotated.
+    const walkFrameSize: Record<string, number> = {
+      VILLAGER: 128,
+      SPEARMAN: 128,
+      ARCHER: 128,
+      CAVALRY: 160
+    };
+    for (const unitType of DIRECTIONAL_WALK_UNITS) {
+      const frame = walkFrameSize[unitType] ?? 128;
+      this.load.spritesheet(`unit_${unitType}_walk`, `/assets/units/${unitType.toLowerCase()}_walk.png?${uv}`, {
+        frameWidth: frame,
+        frameHeight: frame
+      });
+    }
 
     // Preload generated building assets with cache-busting version (2x resolution)
     const v = 'v=3';
@@ -899,19 +916,29 @@ export class WorldScene extends Phaser.Scene {
         container.y = Phaser.Math.Linear(container.y, targetScreen.y, 0.25);
         container.setDepth(getIsoDepth(target.x, target.y, 25));
 
-        // Flip facing direction based on movement
+        // Face the direction of travel. Units with a directional sheet pick the
+        // matching row; the rest are mirrored from their single-facing art.
         const dx = targetScreen.x - prevX;
+        const dy = targetScreen.y - prevY;
         const moveDist = Math.hypot(container.x - prevX, container.y - prevY);
         const unitDisplay = container.getData('unitDisplay') as Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;
         if (unitDisplay) {
-          if (Math.abs(dx) > 0.05) {
+          const hasDirectionalSheet = container.getData('hasDirectionalSheet') === true;
+          if (hasDirectionalSheet) {
+            // Only re-face once the sprite actually travelled a pixel; below that
+            // the delta is lerp jitter and would flip the row every frame.
+            if (Math.hypot(dx, dy) > 0.3) {
+              container.setData('facingDirection', directionIndex(dx, dy));
+            }
+            unitDisplay.setFlipX(false);
+          } else if (Math.abs(dx) > 0.05) {
             unitDisplay.setFlipX(dx < 0);
           }
 
           // Drive animation from the unit's own type/action state. Never hardcode
           // a key here: `updateVisualState` knows `${type}_walk|idle|attack|harvest`.
           const updateVisualState = container.getData('updateVisualState') as
-            | ((actionState: string) => void)
+            | ((actionState: string, direction?: number) => void)
             | undefined;
           if (updateVisualState) {
             const serverState = this.room?.state.units.get(unitId)?.actionState ?? 'IDLE';
@@ -923,7 +950,9 @@ export class WorldScene extends Phaser.Scene {
               // Server still reports MOVING but the sprite has settled (arrived).
               effectiveState = 'IDLE';
             }
-            updateVisualState(effectiveState);
+            const facing =
+              (container.getData('facingDirection') as number | undefined) ?? DEFAULT_DIRECTION_INDEX;
+            updateVisualState(effectiveState, facing);
           }
         }
       }

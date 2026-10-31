@@ -3,6 +3,14 @@ import { TILE_HEIGHT, TILE_WIDTH, UNIT_BLUEPRINTS, getIsoDepth, gridToScreen } f
 import type { BuildingType } from '@chien-quoc/shared';
 import type { WorldScene } from '../scenes/WorldScene.js';
 import { buildingArt, buildingHpBarY } from './buildingArt.js';
+import {
+  DEFAULT_DIRECTION_INDEX,
+  DIRECTION_NAMES,
+  DIRECTIONAL_WALK_UNITS,
+  FRAMES_PER_DIRECTION,
+  directionalIdleKey,
+  directionalWalkKey
+} from './unitDirections.js';
 
 /**
  * Builds and maintains the visual object for every server entity: the container,
@@ -53,6 +61,19 @@ export class EntityRenderer {
     registerAnim('cavalry_idle', 'unit_CAVALRY_sheet', [0], 1);
     registerAnim('cavalry_walk', 'unit_CAVALRY_sheet', [0, 1, 2, 1], 8);
     registerAnim('cavalry_attack', 'unit_CAVALRY_sheet', [0, 3, 0], 6);
+
+    // Directional walk sheets: one row per compass direction, four frames per row.
+    // Units without the sheet keep the clips above, so the two systems coexist
+    // while the remaining units are redrawn.
+    for (const unitType of DIRECTIONAL_WALK_UNITS) {
+      const texture = `unit_${unitType}_walk`;
+      if (!scene.textures.exists(texture)) continue;
+      DIRECTION_NAMES.forEach((_, direction) => {
+        const first = direction * FRAMES_PER_DIRECTION;
+        registerAnim(directionalWalkKey(unitType, direction), texture, [first, first + 1, first + 2, first + 3], 8);
+        registerAnim(directionalIdleKey(unitType, direction), texture, [first], 1);
+      });
+    }
   }
 
   createResourceNodeSprite(id: string, node: any) {
@@ -213,7 +234,9 @@ export class EntityRenderer {
     const lowerType = unitType.toLowerCase();
     const sheetKey = `unit_${unitType}_sheet`;
     const idleKey = `unit_${unitType}_idle`;
-    const hasSheet = scene.textures.exists(sheetKey);
+    const walkSheetKey = `unit_${unitType}_walk`;
+    const hasDirectionalSheet = scene.textures.exists(walkSheetKey);
+    const hasSheet = hasDirectionalSheet || scene.textures.exists(sheetKey);
     const blueprint = UNIT_BLUEPRINTS[unitType as keyof typeof UNIT_BLUEPRINTS];
 
     let unitDisplay: Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;
@@ -222,9 +245,11 @@ export class EntityRenderer {
     const visualScale = isCavalry ? 0.75 : 0.72;
 
     if (hasSheet) {
-      const sprite = scene.add.sprite(0, visualOffsetY, sheetKey, 0);
+      const sprite = scene.add.sprite(0, visualOffsetY, hasDirectionalSheet ? walkSheetKey : sheetKey, 0);
       sprite.setScale(visualScale);
-      const idleAnim = `${lowerType}_idle`;
+      const idleAnim = hasDirectionalSheet
+        ? directionalIdleKey(unitType, DEFAULT_DIRECTION_INDEX)
+        : `${lowerType}_idle`;
       if (scene.anims.exists(idleAnim)) {
         sprite.play(idleAnim);
       }
@@ -271,11 +296,15 @@ export class EntityRenderer {
     scene.unitSprites.set(id, container);
     scene.unitTargetPositions.set(id, { x: unit.x, y: unit.y, hp: unit.hp, maxHp: unit.maxHp });
 
-    const updateVisualState = (actionState: string) => {
+    const updateVisualState = (actionState: string, direction: number = DEFAULT_DIRECTION_INDEX) => {
       if (!hasSheet || !(unitDisplay instanceof Phaser.GameObjects.Sprite)) return;
 
-      const idleAnim = `${lowerType}_idle`;
-      const walkAnim = `${lowerType}_walk`;
+      const idleAnim = hasDirectionalSheet
+        ? directionalIdleKey(unitType, direction)
+        : `${lowerType}_idle`;
+      const walkAnim = hasDirectionalSheet
+        ? directionalWalkKey(unitType, direction)
+        : `${lowerType}_walk`;
       // Only villagers have a harvest animation; only combat units have an attack one.
       const harvestAnim = blueprint?.canHarvest ? 'villager_harvest' : null;
       const attackAnim = `${lowerType}_attack`;
@@ -316,14 +345,17 @@ export class EntityRenderer {
     // Expose the state-driven animation helper so update() never has to guess
     // which animation key belongs to this unit type.
     container.setData('updateVisualState', updateVisualState);
+    container.setData('hasDirectionalSheet', hasDirectionalSheet);
+    container.setData('facingDirection', DEFAULT_DIRECTION_INDEX);
 
-    updateVisualState(unit.actionState);
+    updateVisualState(unit.actionState, DEFAULT_DIRECTION_INDEX);
 
     if (cb) {
       cb.onChange(unit, () => {
         scene.unitTargetPositions.set(id, { x: unit.x, y: unit.y, hp: unit.hp, maxHp: unit.maxHp });
         this.updateUnitBar(container, unit.hp, unit.maxHp, isCavalry);
-        updateVisualState(unit.actionState);
+        const facing = (container.getData('facingDirection') as number | undefined) ?? DEFAULT_DIRECTION_INDEX;
+        updateVisualState(unit.actionState, facing);
       });
     }
   }

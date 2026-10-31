@@ -31,3 +31,11 @@ Thumbs.db
 *.db-shm
 
 
+
+# Scratch artifacts from the asset pipelines (previews, probes, debug dumps)
+scripts/raw_downloads/**/preview_*
+scripts/raw_downloads/**/check_*
+scripts/raw_downloads/**/zoom_*
+scripts/raw_downloads/**/_*
+scripts/raw_downloads/**/*_contact.png
+scripts/raw_downloads/**/jobs_*.json

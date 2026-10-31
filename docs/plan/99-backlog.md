@@ -93,3 +93,17 @@ Ghi lại để không quên. Chỉ bốc lên phase khi user quyết định.
   `scripts/raw_downloads/m_*_mat.png` → `scripts/rebuild_buildings_canva.py`. Đã chỉnh
   `HP_BAR_Y` vì art mới không chạm mép trên sheet. Còn lệch nhẹ: bánh xe nước của `farm`
   vẽ nhỏ hơn tỉ lệ của `mill` — sửa được nếu thấy khó chịu trong game.
+- **Unit 8 hướng: mới xong VILLAGER** — `villager_walk.png` 512x1024 (8 hàng hướng × 4 frame
+  128x128), hàng theo thứ tự E/SE/S/SW/W/NW/N/NE khớp `directionIndex()`. Code: `render/unitDirections.ts`,
+  `EntityRenderer` đăng ký `${type}_walk_${DIR}` + `${type}_idle_${DIR}`, `WorldScene` tính hướng
+  từ delta màn hình (>0.3 px mới đổi, tránh rung). Unit chưa có sheet vẫn dùng sheet cũ + `flipX`.
+  Cả 8 hướng đều là strip Canva riêng (kể cả `W`, `NW`, `NE`, `N`) — không còn lật gương hay
+  hàng tĩnh. Nền tách tại chỗ bằng `scripts/build_unit_8dir.py`: flood-fill vùng nền nối với viền,
+  coi cả bóng đổ xám (sat ≤ 18, luma ≥ 120) là nền nên không còn vệt bẩn dưới chân; viền mềm 1 px
+  và unblend kênh màu để hết quầng trắng; neo đáy theo baseline chung, canh ngang theo tâm trung
+  bình của hàng (canh từng frame làm mất nhịp lắc người). Không cần gọi `remove_background` của
+  Canva → 0 quota, tái lập được từ `scripts/raw_downloads/units_8dir/`.
+  Hạn chế còn lại: sải chân ở `S`/`N` hẹp nên nếu chạy nhanh dễ đọc thành trượt; spearman / archer
+  / cavalry chưa vẽ; anim `attack` / `harvest` vẫn dùng sheet cũ nên lúc đánh nhau nhân vật đổi
+  tạo hình. Tỉ lệ giữa các hướng lệch nhẹ vì mỗi hướng là một lần gen riêng (chiều cao bbox
+  541-644 px, phần lớn do cán cuốc chĩa lên khác nhau).
