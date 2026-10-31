@@ -116,6 +116,22 @@ flowchart TD
 
 Size: **S** < 2h, **M** ~ nửa ngày, **L** >= 1 ngày.
 
+## Code layout (server)
+
+`WorldRoom` từ 2215 dòng xuống còn ~1005 sau khi tách 4 hệ; mỗi hệ nhận `state` và một interface
+`<Name>Ports` gồm đúng những method nó cần gọi ngược lại room:
+
+| Module | Dòng | Sở hữu |
+| --- | --- | --- |
+| `rooms/EconomySystem.ts` | 363 | harvest, mang hàng, drop-off, retarget (CMD-06, SIM-02) |
+| `rooms/CombatSystem.ts` | 260 | damage, `attackTimers`/`towerTimers`, aggro, kill/destroy (CMD-01, SIM-03) |
+| `rooms/CommandSystem.ts` | 662 | 11 handler `handle*`, validate payload, formation, refund (CMD-02..CMD-05, CTL-*) |
+| `rooms/MovementSystem.ts` | 210 | `setWalkTarget`, waypoint queue, `processPendingPaths`, blocked-grid cache (SIM-01, CTL-05) |
+| `rooms/WorldRoom.ts` | 1005 | tick loop, persistence/restore, spawn, population — phần thuộc về chính nó |
+
+`MovementSystem` không cần ports (chỉ sửa unit được truyền vào); room giữ các getter lazy
+`combat` / `commands` / `economy` / `movement` vì `this.state` chỉ tồn tại sau `onCreate()`.
+
 ## Definition of Done (chung)
 
 - [ ] `cd apps/server && ../../node_modules/.bin/tsc --noEmit` sạch
