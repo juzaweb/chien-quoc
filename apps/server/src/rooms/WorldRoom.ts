@@ -513,10 +513,19 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       throw new ServerError(ErrorCode.AUTH_FAILED, 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.');
     }
 
+    // The signature only proves we issued the token; the account it names may be
+    // gone (database reset, deleted account). Joining as a deleted id would spawn
+    // a ghost empire that can never be saved, so re-read the account and take the
+    // identity from the database rather than from the claims.
+    const user = await AuthService.findById(payload.id);
+    if (!user) {
+      throw new ServerError(ErrorCode.AUTH_FAILED, 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.');
+    }
+
     return {
-      userId: payload.id,
-      username: payload.username,
-      displayName: payload.displayName
+      userId: user.id,
+      username: user.username,
+      displayName: user.displayName
     };
   }
 

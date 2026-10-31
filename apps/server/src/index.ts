@@ -60,19 +60,21 @@ app.post('/auth/login', authRateLimit, async (req, res) => {
   }
 });
 
-app.get('/auth/me', (req, res) => {
+app.get('/auth/me', async (req, res) => {
   const header = req.headers.authorization ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : undefined;
   const payload = AuthService.verifyToken(token);
 
-  if (!payload) {
+  // A valid signature is not enough: after a database reset an old token still
+  // verifies. Re-read the account so the client drops a dead session here
+  // instead of joining the room as an empire nobody owns.
+  const user = payload ? await AuthService.findById(payload.id) : null;
+  if (!user) {
     res.status(401).json({ error: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
     return;
   }
 
-  res.json({
-    user: { id: payload.id, username: payload.username, displayName: payload.displayName }
-  });
+  res.json({ user });
 });
 
 async function start() {

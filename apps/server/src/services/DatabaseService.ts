@@ -55,6 +55,9 @@ export class DatabaseService {
     // Create the schema on a brand-new database file (idempotent DDL).
     await this.ensureSchema();
 
+    // Drop empires whose account is gone before anything reads or writes them.
+    await this.pruneOrphanedPlayers();
+
     // Enable WAL mode in SQLite for concurrent reads and writes
     await prisma.$queryRawUnsafe('PRAGMA journal_mode = WAL;');
     console.log('📦 [DatabaseService] SQLite database connected with WAL mode enabled.');
@@ -91,6 +94,36 @@ export class DatabaseService {
     for (const statement of DATABASE_INDEX_STATEMENTS) {
       await prisma.$executeRawUnsafe(statement);
     }
+  }
+
+  /**
+   * Deletes empires whose account no longer exists.
+   *
+   * `Player.id` is `User.id`, so a player row without a matching account is
+   * unreachable — nobody can sign in as it. It still holds a `players.name`,
+   * which makes the next save for that display name fail with P2002 (typical
+   * after a database reset while a client keeps its old token).
+   */
+  private static async pruneOrphanedPlayers(): Promise<void> {
+    const orphans = await prisma.$queryRawUnsafe<{ id: string }[]>(
+      'SELECT "id" FROM "players" WHERE "id" NOT IN (SELECT "id" FROM "users")'
+    );
+    if (orphans.length === 0) {
+      return;
+    }
+
+    const ids = orphans.map((row) => row.id);
+    // Explicit child deletes: the boot DDL declares ON DELETE CASCADE, but this
+    // must also clean up correctly when SQLite has FK enforcement disabled.
+    await prisma.$transaction([
+      prisma.building.deleteMany({ where: { ownerId: { in: ids } } }),
+      prisma.unit.deleteMany({ where: { ownerId: { in: ids } } }),
+      prisma.player.deleteMany({ where: { id: { in: ids } } })
+    ]);
+
+    console.log(
+      `🧹 [DatabaseService] Removed ${ids.length} orphaned empire(s) with no matching account.`
+    );
   }
 
   /**
@@ -286,7 +319,7 @@ export class DatabaseService {
         }
       });
     } catch (err) {
-      console.error(`❌ [DatabaseService] Failed to save empire for ${player.name}:`, err);
+      console.error(`❌ [DatabaseService] Failed to save empire for ${player.name} (${ownerId}):`, err);
     }
   }
 

@@ -149,7 +149,31 @@ export class AuthService {
   }
 
   /**
+   * Resolves an account by id, or `null` when no such account exists.
+   *
+   * A token stays valid for days and its signature only proves we issued it, so
+   * the account it names must be re-read from the database. Without this, a token
+   * issued before the database was reset still authenticates as a deleted
+   * account, joins as a ghost empire, and its save dies on the display name the
+   * live account already owns.
+   */
+  public static async findById(id: string): Promise<AuthUser | null> {
+    const rows = await prisma.$queryRaw<UserRow[]>`
+      SELECT "id", "username", "display_name" AS "displayName", "password_hash" AS "passwordHash"
+      FROM "users"
+      WHERE "id" = ${id}
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) return null;
+    return { id: row.id, username: row.username, displayName: row.displayName };
+  }
+
+  /**
    * Resolves a bearer token into its account, or `null` when invalid/expired.
+   *
+   * Signature and expiry only: callers that need the account to still exist must
+   * follow up with `findById`.
    */
   public static verifyToken(token: string | null | undefined): AuthTokenPayload | null {
     if (!token) return null;
